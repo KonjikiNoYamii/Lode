@@ -383,7 +383,34 @@ export function addMessage(
   touchConversation(conversationId);
 }
 
-export function listMessages(conversationId: number): Message[] {
+export function countMessages(conversationId: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?")
+    .get(conversationId) as { c: number } | undefined;
+  return row?.c ?? 0;
+}
+
+export function listMessages(
+  conversationId: number,
+  limit?: number,
+  beforeId?: number,
+): Message[] {
+  if (limit && limit > 0) {
+    if (beforeId && beforeId > 0) {
+      const rows = db
+        .prepare(
+          "SELECT * FROM messages WHERE conversation_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+        )
+        .all(conversationId, beforeId, limit) as unknown as Message[];
+      return rows.reverse();
+    }
+    const rows = db
+      .prepare(
+        "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+      )
+      .all(conversationId, limit) as unknown as Message[];
+    return rows.reverse();
+  }
   return db
     .prepare(
       "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC",

@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   addMemory,
   addMessage,
+  countMessages,
   createConversation,
   deleteConversation,
   deleteMemory,
@@ -682,9 +683,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (convMatch) {
     const cid = Number(convMatch[1]);
     if (method === "GET") {
+      const limitParam = url.searchParams.get("limit");
+      const beforeParam = url.searchParams.get("before");
+      const limit = limitParam ? Number(limitParam) : undefined;
+      const beforeId = beforeParam ? Number(beforeParam) : undefined;
+      const totalMessages = countMessages(cid);
+      const messages = listMessages(cid, limit, beforeId);
       return sendJson(res, 200, {
         conversation_id: cid,
-        messages: listMessages(cid),
+        total_messages: totalMessages,
+        messages,
         folder: getConversation(cid)?.folder ?? "",
       });
     }
