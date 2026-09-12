@@ -273,7 +273,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const profile = getProfile();
     const topics = listTopicsByConversation(cid);
     const memories = listMemoriesByConversation(cid);
-    const history = listMessages(cid).slice(-14);
+    const ACTIVE_CHAT_WINDOW = 50;
+    const history = listMessages(cid).slice(-ACTIVE_CHAT_WINDOW);
 
     const wsMaxDepth = clampInt(profile.ws_max_depth, 1, 8, 3);
     const wsMaxFiles = clampInt(profile.ws_max_files, 10, 1000, 150);
