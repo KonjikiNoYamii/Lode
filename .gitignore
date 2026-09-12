@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# database lokal & SQLite WAL (privasi kamu, jangan di-commit)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# hasil build
+dist/
+
+# env
+.env
+.env.*
+!.env.example
+
+# log & misc
+*.log
+.DS_Store
