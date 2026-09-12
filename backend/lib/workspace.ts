@@ -33,7 +33,7 @@ const SKIP_DIRS = new Set([
   "Packages",
 ]);
 
-const SKIP_EXT = new Set([
+const BINARY_EXT = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif",
   ".mp4", ".mp3", ".wav", ".ogg", ".flac",
   ".zip", ".tar", ".gz", ".7z", ".rar",
@@ -42,6 +42,16 @@ const SKIP_EXT = new Set([
   ".pyc", ".class", ".jar",
   ".db", ".sqlite", ".sqlite3", ".lock",
   ".min.js", ".map",
+]);
+
+// Hanya filter file duplikasi mesin atau OS yang mengotori daftar (mis. Unity .meta)
+const TREE_IGNORE_EXT = new Set([
+  ".meta",
+]);
+
+const TREE_IGNORE_FILES = new Set([
+  ".DS_Store",
+  "Thumbs.db",
 ]);
 
 export interface WorkspaceEntry {
@@ -92,7 +102,8 @@ export async function workspaceInfo(
         }
         await count(rel ? `${rel}/${name}` : name, depth + 1);
       } else {
-        if (SKIP_EXT.has(path.extname(name).toLowerCase())) continue;
+        const ext = path.extname(name).toLowerCase();
+        if (TREE_IGNORE_EXT.has(ext) || TREE_IGNORE_FILES.has(name)) continue;
         fileCount++;
       }
     }
@@ -138,7 +149,8 @@ export async function scanWorkspace(
         if (SKIP_DIRS.has(name)) continue;
         dirs.push(name);
       } else {
-        if (SKIP_EXT.has(path.extname(name).toLowerCase())) continue;
+        const ext = path.extname(name).toLowerCase();
+        if (TREE_IGNORE_EXT.has(ext) || TREE_IGNORE_FILES.has(name)) continue;
         files.push(name);
       }
     }
@@ -199,7 +211,7 @@ export async function readWorkspaceFile(
   const st = await fs.stat(real).catch(() => null);
   if (!st || !st.isFile()) return null;
   if (st.size > 400_000) return null;
-  if (SKIP_EXT.has(path.extname(real).toLowerCase())) return null;
+  if (BINARY_EXT.has(path.extname(real).toLowerCase())) return null;
 
   const buf = await fs.readFile(real);
   if (buf.includes(0)) return null;
@@ -403,7 +415,7 @@ export async function applyWorkspaceWrites(
       results.push({ rel: w.rel, created: false, bytes: 0, error: "di luar workspace" });
       continue;
     }
-    if (SKIP_EXT.has(path.extname(w.rel).toLowerCase())) {
+    if (BINARY_EXT.has(path.extname(w.rel).toLowerCase())) {
       results.push({ rel: w.rel, created: false, bytes: 0, error: "ekstensi file dilarang" });
       continue;
     }
