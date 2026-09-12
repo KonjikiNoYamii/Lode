@@ -1,0 +1,17 @@
+{
+  "name": "sensei-mentor-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' tsx watch server/index.ts",
+    "start": "node --disable-warning=ExperimentalWarning --import tsx server/index.ts",
+    "ai": "bash -c 'if curl -s --max-time 2 -o /dev/null http://localhost:8000/; then echo \"[ai] gemini-server sudah berjalan di :8000\"; else echo \"[ai] menjalankan gemini-server...\"; bash \"$HOME/Documents/gemini-server/start.sh\"; fi'",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
