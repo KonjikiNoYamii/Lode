@@ -59,6 +59,8 @@ interface Props {
   messages: Message[];
   topics?: Topic[];
   memories?: Memory[];
+  totalMessages?: number;
+  onLoadEarlier?: () => Promise<void>;
   addMessages: (msgs: Message[]) => void;
   onNewConversation: (id: number, title: string) => void;
   onMemoryUpdated: (id: number) => void;
@@ -107,6 +109,8 @@ export default function ChatRoom({
   messages,
   topics = [],
   memories = [],
+  totalMessages = 0,
+  onLoadEarlier,
   addMessages,
   onNewConversation,
   onMemoryUpdated,
@@ -125,20 +129,37 @@ export default function ChatRoom({
   );
   const [folderChecking, setFolderChecking] = useState(false);
   const [folderSaving, setFolderSaving] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [mood, setMood] = useState<Mood>("netral");
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef<HTMLTextAreaElement>(null);
+  const prevLastMsgIdRef = useRef<number | undefined>(undefined);
 
   const mascotName = profile?.mascot || "Sensei";
+
+  const handleLoadEarlier = async () => {
+    if (!onLoadEarlier || loadingEarlier) return;
+    setLoadingEarlier(true);
+    try {
+      await onLoadEarlier();
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
 
   useEffect(() => {
     const last = [...messages].reverse().find((m) => m.role === "assistant" && m.mood);
     if (last?.mood && isMood(last.mood)) setMood(last.mood);
   }, [messages, currentId]);
 
+  const lastMsgId = messages[messages.length - 1]?.id;
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, live]);
+    if (!lastMsgId && !live) return;
+    if (lastMsgId !== prevLastMsgIdRef.current || live) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    prevLastMsgIdRef.current = lastMsgId;
+  }, [lastMsgId, live]);
 
   useEffect(() => {
     setLive("");
@@ -474,6 +495,19 @@ export default function ChatRoom({
           </div>
         ) : (
           <>
+            {totalMessages > messages.length && (
+              <div className="flex justify-center pb-2 pt-1">
+                <button
+                  onClick={handleLoadEarlier}
+                  disabled={loadingEarlier}
+                  className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-semibold text-mist transition hover:border-sakura/40 hover:text-night disabled:opacity-40"
+                >
+                  {loadingEarlier
+                    ? "Memuat pesan sebelumnya…"
+                    : `↑ Muat 50 pesan sebelumnya (${totalMessages - messages.length} tersisa)`}
+                </button>
+              </div>
+            )}
             {messages.map((m) =>
               m.role === "user" ? (
                 <div key={m.id} className="flex justify-end">

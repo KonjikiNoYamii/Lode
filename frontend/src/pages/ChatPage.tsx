@@ -43,16 +43,22 @@ export default function ChatPage() {
     refresh(null);
   }, [refresh]);
 
+  const [totalMessages, setTotalMessages] = useState(0);
+
   const addMessages = useCallback((msgs: Message[]) => {
     setMessages((prev) => [...prev, ...msgs]);
+    setTotalMessages((prev) => prev + msgs.length);
   }, []);
 
   const loadConversation = useCallback(
     async (id: number) => {
       try {
-        const data = await get<{ messages: Message[] }>(`/api/conversations/${id}`);
+        const data = await get<{ messages: Message[]; total_messages?: number }>(
+          `/api/conversations/${id}?limit=50`,
+        );
         setCurrentId(id);
         setMessages(data.messages);
+        setTotalMessages(data.total_messages ?? data.messages.length);
         setSideOpen(false);
         await refresh(id);
       } catch {
@@ -62,9 +68,28 @@ export default function ChatPage() {
     [refresh],
   );
 
+  const loadEarlierMessages = useCallback(async () => {
+    if (!currentId || messages.length === 0) return;
+    const firstId = messages[0].id;
+    try {
+      const data = await get<{ messages: Message[]; total_messages?: number }>(
+        `/api/conversations/${currentId}?limit=50&before=${firstId}`,
+      );
+      if (data.messages && data.messages.length > 0) {
+        setMessages((prev) => [...data.messages, ...prev]);
+        if (typeof data.total_messages === "number") {
+          setTotalMessages(data.total_messages);
+        }
+      }
+    } catch {
+      // gagal muat pesan lama
+    }
+  }, [currentId, messages]);
+
   const newChat = useCallback(() => {
     setCurrentId(null);
     setMessages([]);
+    setTotalMessages(0);
     setProgressTopics([]);
     setSideOpen(false);
   }, []);
@@ -138,6 +163,8 @@ export default function ChatPage() {
         messages={messages}
         topics={progressTopics}
         memories={memories}
+        totalMessages={totalMessages}
+        onLoadEarlier={loadEarlierMessages}
         addMessages={addMessages}
         onNewConversation={onNewConversation}
         onMemoryUpdated={(id) => refresh(id)}
