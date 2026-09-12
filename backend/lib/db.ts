@@ -187,14 +187,17 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_memories_conv ON memories(conversation_i
 ensureColumn("conversations", "folder", "folder TEXT NOT NULL DEFAULT ''");
 ensureColumn("messages", "mood", "mood TEXT NOT NULL DEFAULT ''");
 ensureColumn("profile", "workspace", "workspace TEXT NOT NULL DEFAULT ''");
-ensureColumn("profile", "ws_max_depth", "ws_max_depth INTEGER NOT NULL DEFAULT 3");
-ensureColumn("profile", "ws_max_files", "ws_max_files INTEGER NOT NULL DEFAULT 150");
+ensureColumn("profile", "ws_max_depth", "ws_max_depth INTEGER NOT NULL DEFAULT 7");
+ensureColumn("profile", "ws_max_files", "ws_max_files INTEGER NOT NULL DEFAULT 350");
 ensureColumn("profile", "ws_auto_kb", "ws_auto_kb INTEGER NOT NULL DEFAULT 0");
 ensureColumn(
   "profile",
   "ws_allow_write",
   "ws_allow_write INTEGER NOT NULL DEFAULT 1",
 );
+
+db.prepare("UPDATE profile SET ws_max_depth = 7 WHERE id = 1 AND ws_max_depth = 3").run();
+db.prepare("UPDATE profile SET ws_max_files = 350 WHERE id = 1 AND ws_max_files = 150").run();
 
 const ENV_BASE_URL = process.env.GEMINI_SERVER_BASE_URL;
 

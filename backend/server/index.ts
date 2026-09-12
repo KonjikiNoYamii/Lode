@@ -276,8 +276,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const ACTIVE_CHAT_WINDOW = 50;
     const history = listMessages(cid).slice(-ACTIVE_CHAT_WINDOW);
 
-    const wsMaxDepth = clampInt(profile.ws_max_depth, 1, 8, 3);
-    const wsMaxFiles = clampInt(profile.ws_max_files, 10, 1000, 150);
+    const wsMaxDepth = clampInt(profile.ws_max_depth, 1, 12, 7);
+    const wsMaxFiles = clampInt(profile.ws_max_files, 10, 3000, 350);
     const wsAutoKb = clampInt(profile.ws_auto_kb, 0, 5000, 0);
     const allowWrite = profile.ws_allow_write !== 0;
 
@@ -579,12 +579,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!folder) return sendJson(res, 400, { ok: false, error: "folder kosong" });
     try {
       const info = await workspaceInfo(folder, {
-        maxDepth: clampInt(url.searchParams.get("depth"), 1, 8, clampInt(getProfile().ws_max_depth, 1, 8, 3)),
+        maxDepth: clampInt(url.searchParams.get("depth"), 1, 12, clampInt(getProfile().ws_max_depth, 1, 12, 7)),
         maxEntries: clampInt(
           url.searchParams.get("files"),
           10,
-          1000,
-          clampInt(getProfile().ws_max_files, 10, 1000, 150),
+          3000,
+          clampInt(getProfile().ws_max_files, 10, 3000, 350),
         ),
       });
       return sendJson(res, 200, { ok: true, ...info });
@@ -604,14 +604,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         maxEntries: clampInt(
           url.searchParams.get("files"),
           10,
-          1000,
-          clampInt(getProfile().ws_max_files, 10, 1000, 150),
+          3000,
+          clampInt(getProfile().ws_max_files, 10, 3000, 350),
         ),
         maxDepth: clampInt(
           url.searchParams.get("depth"),
           1,
-          8,
-          clampInt(getProfile().ws_max_depth, 1, 8, 3),
+          12,
+          clampInt(getProfile().ws_max_depth, 1, 12, 7),
         ),
       });
       return sendJson(res, 200, { ok: true, ...scan });

@@ -72,7 +72,7 @@ export async function workspaceInfo(
   dir: string,
   opts: { maxDepth?: number; maxEntries?: number } = {},
 ): Promise<{ root: string; fileCount: number; skippedDirs: number }> {
-  const maxDepth = opts.maxDepth ?? 4;
+  const maxDepth = opts.maxDepth ?? 7;
   const maxCount = opts.maxEntries ?? 9999;
   const root = await fs.realpath(dir);
   const stat = await fs.stat(root);
@@ -243,8 +243,8 @@ export async function buildWorkspaceContext(
   dir: string,
   opts: WorkspaceCtxOptions = {},
 ): Promise<string> {
-  const maxDepth = opts.maxDepth ?? 3;
-  const maxEntries = opts.maxEntries ?? 150;
+  const maxDepth = opts.maxDepth ?? 7;
+  const maxEntries = opts.maxEntries ?? 350;
   const autoDumpKB = opts.autoDumpKB ?? 0;
 
   let scan: ScanResult;
