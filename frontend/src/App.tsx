@@ -12,13 +12,13 @@ export default function App() {
 
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-white/10 bg-panel/70 px-4 py-2.5 backdrop-blur sm:px-6">
         <div className="flex items-center gap-2.5">
-          <Mascot name="Sensei" size="sm" />
+          <Mascot name="Lode" size="sm" />
           <div className="leading-tight">
             <div className="bg-gradient-to-r from-sakura to-mew bg-clip-text text-lg font-extrabold text-transparent">
-              Sensei
+              Lode
             </div>
             <div className="-mt-0.5 text-[11px] text-mist">
-              Mentor belajar • memori panjang
+              Dev Guide • Persistent Memory
             </div>
           </div>
         </div>

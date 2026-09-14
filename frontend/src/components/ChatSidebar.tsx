@@ -38,11 +38,11 @@ export default function ChatSidebar({
     >
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <div className="flex items-center gap-2">
-          <Mascot name={profile?.mascot || "Sensei"} size="sm" />
+          <Mascot name={profile?.mascot || "Lode"} size="sm" />
           <div className="leading-tight">
             <div className="text-sm font-bold">{profile?.name || "Acolyte"}</div>
             <div className="text-[11px] text-mist">
-              {profile?.mascot || "Sensei"} siap mengajar
+              {profile?.mascot || "Lode"} siap mengajar
             </div>
           </div>
         </div>

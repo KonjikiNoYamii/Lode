@@ -28,7 +28,7 @@ export function Mascot({
     return (
       <img
         src="/avatars/yami-netral.png"
-        alt={name || "Sensei"}
+        alt={name || "Lode"}
         onError={() => setImgError(true)}
         className={`${cls} select-none rounded-full object-cover ring-2 ring-sakura/40 shadow-md shadow-sakura/20 shrink-0`}
       />
