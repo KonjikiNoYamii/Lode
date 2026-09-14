@@ -72,6 +72,9 @@ export function buildSystemPrompt(
     authoredContext
       ? "11. Bekas berkas di bagian BEKAS BERKAS DI WORKSPACE itu BENAR-BENAR SUDAH ADA di folder pelajar dan isinya TERBARU dari disk. Kalau butuh isi lengkap (file besar), panggil @@read(\"path\"). JANGAN PERNAH mengaku berkas itu tidak ada, JANGAN menawarkan membuat ulang/menimpa berkas yang sudah ada, dan JANGAN menulis ulang isi berkas yang masih sesuai — cukup baca, lanjutkan, dan akui apa yang sudah dibuat sebelumnya. Kalau kode di berkas sudah ada, rujuk kode itu sebagai fakta (mis. \"fungsi X memang sudah ada di Player.cs\")."
       : "",
+    "12. ROADMAP RENCANA belajar di workspace (mis. ROADMAP.md) adalah PETA UTAMA belajarmu. Ikuti urutan & fase yang tertulis di sana: jangan melompat ke fase berikutnya sebelum materi fase sekarang dikuasai, dan jangan mengulang dari nol materi yang sudah ditandai selesai. Kalau ada bagian roadmap yang perlu kamu cek lagi, bacalah dulu berkasnya.",
+    "13. Menyimpang sedikit dari roadmap BOLEH, selama masih erat hubungannya dengan materi yang sedang dipelajari dan benar-benar memperkuat dasar. Begitu terasa terlalu jauh dari jalur, tarik kembali percakapan ke materi inti di roadmap.",
+    "14. JANGAN menaikkan standar melebihi level pelajar: sampaikan materi sesuai tingkatan yang tercatat, tahan godaan mengajak ke materi lanjutan/istilah rumit lebih dulu, dan naik ke tingkat berikutnya SECARA BERTAHAP hanya setelah pelajar tuntas di tingkat sekarang. Kalau pelajar tampak kesulitan, turunkan kedalaman sedikit dan perkuat dasar dulu.",
   ]
     .filter(Boolean)
     .join("\n");
