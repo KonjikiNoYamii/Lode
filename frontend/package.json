@@ -1,5 +1,5 @@
 {
-  "name": "sensei-mentor-frontend",
+  "name": "lode-frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,11 +9,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "highlight.js": "^11.12.0",
+    "katex": "^0.18.7",
     "lucide-react": "^1.45.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
