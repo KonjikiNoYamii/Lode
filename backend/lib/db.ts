@@ -29,6 +29,8 @@ export interface Conversation {
   id: number;
   title: string;
   folder: string;
+  ai_thread: string;
+  ai_session: string;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -76,7 +78,7 @@ CREATE TABLE IF NOT EXISTS profile (
   skill_level TEXT NOT NULL DEFAULT 'pemula',
   goals TEXT NOT NULL DEFAULT '',
   learning_style TEXT NOT NULL DEFAULT 'praktek',
-  mascot TEXT NOT NULL DEFAULT 'Sensei',
+  mascot TEXT NOT NULL DEFAULT 'Lode',
   workspace TEXT NOT NULL DEFAULT '',
   ai_base_url TEXT NOT NULL DEFAULT 'http://localhost:8000/v1',
   ai_api_key TEXT NOT NULL DEFAULT '',
@@ -119,6 +121,14 @@ CREATE TABLE IF NOT EXISTS topics (
   conversation_id INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS workspace_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL DEFAULT 0,
+  rel TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_wf_conv_rel ON workspace_files(conversation_id, rel);
 `);
 
 db.prepare("INSERT OR IGNORE INTO profile (id) VALUES (1)").run();
@@ -185,6 +195,16 @@ ensureColumn(
 db.exec("CREATE INDEX IF NOT EXISTS idx_memories_conv ON memories(conversation_id)");
 
 ensureColumn("conversations", "folder", "folder TEXT NOT NULL DEFAULT ''");
+ensureColumn(
+  "conversations",
+  "ai_thread",
+  "ai_thread TEXT NOT NULL DEFAULT ''",
+);
+ensureColumn(
+  "conversations",
+  "ai_session",
+  "ai_session TEXT NOT NULL DEFAULT ''",
+);
 ensureColumn("messages", "mood", "mood TEXT NOT NULL DEFAULT ''");
 ensureColumn("profile", "workspace", "workspace TEXT NOT NULL DEFAULT ''");
 ensureColumn("profile", "ws_max_depth", "ws_max_depth INTEGER NOT NULL DEFAULT 7");
@@ -253,10 +273,16 @@ export function listConversations(): Conversation[] {
     .all() as unknown as Conversation[];
 }
 
-export function createConversation(title: string, folder = ""): number {
+export function createConversation(
+  title: string,
+  folder = "",
+  aiSession = "",
+): number {
   const result = db
-    .prepare("INSERT INTO conversations (title, folder) VALUES (?, ?)")
-    .run(title, folder);
+    .prepare(
+      "INSERT INTO conversations (title, folder, ai_session) VALUES (?, ?, ?)",
+    )
+    .run(title, folder, aiSession);
   return Number(result.lastInsertRowid);
 }
 
@@ -275,9 +301,9 @@ export function getConversation(id: number): Conversation | null {
 
 export function patchConversation(
   id: number,
-  patch: { title?: string; folder?: string },
+  patch: { title?: string; folder?: string; ai_thread?: string; ai_session?: string },
 ): void {
-  const keys = ["title", "folder"].filter(
+  const keys = ["title", "folder", "ai_thread", "ai_session"].filter(
     (k) => patch[k as keyof typeof patch] !== undefined,
   );
   if (keys.length === 0) return;
@@ -292,6 +318,7 @@ export function deleteConversation(id: number): void {
   db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM topics WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM memories WHERE conversation_id = ?").run(id);
+  db.prepare("DELETE FROM workspace_files WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
   walCheckpoint();
 }
@@ -356,6 +383,10 @@ export function runMaintenance(): MaintenanceResult {
       )
       .run().changes,
   );
+
+  db.prepare(
+    "DELETE FROM workspace_files WHERE conversation_id NOT IN (SELECT id FROM conversations)",
+  ).run();
 
   db.prepare("PRAGMA optimize").all();
   walCheckpoint();
@@ -531,4 +562,29 @@ export function addMemory(
 
 export function deleteMemory(id: number): void {
   db.prepare("DELETE FROM memories WHERE id = ?").run(id);
+}
+
+export interface WorkspaceFileRecord {
+  id: number;
+  conversation_id: number;
+  rel: string;
+  updated_at: string;
+}
+
+export function upsertWorkspaceFile(conversationId: number, rel: string): void {
+  const clean = rel.trim();
+  if (!clean) return;
+  db.prepare(
+    `INSERT INTO workspace_files (conversation_id, rel)
+     VALUES (?, ?)
+     ON CONFLICT(conversation_id, rel) DO UPDATE SET updated_at = datetime('now')`,
+  ).run(conversationId, clean);
+}
+
+export function listWorkspaceFiles(conversationId: number): WorkspaceFileRecord[] {
+  return db
+    .prepare(
+      "SELECT * FROM workspace_files WHERE conversation_id = ? ORDER BY updated_at DESC, rel ASC",
+    )
+    .all(conversationId) as unknown as WorkspaceFileRecord[];
 }
