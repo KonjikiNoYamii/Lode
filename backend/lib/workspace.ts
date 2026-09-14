@@ -221,6 +221,39 @@ export async function readWorkspaceFile(
   return { content: truncated ? text.slice(0, cap) : text, truncated };
 }
 
+const AUTORED_PER_FILE = 4000;
+const AUTORED_TOTAL = 24000;
+const AUTORED_MAX_FILES = 40;
+
+export async function buildAuthoredFilesContext(
+  dir: string,
+  rels: string[],
+): Promise<string> {
+  if (!dir || rels.length === 0) return "";
+  const out: string[] = [];
+  let used = 0;
+
+  for (const rel of rels.slice(0, AUTORED_MAX_FILES)) {
+    if (used >= AUTORED_TOTAL) {
+      out.push(
+        `…(dan berkas lain ditulis dulu — panggil @@read("path") untuk isi lengkapnya)`,
+      );
+      break;
+    }
+    const headClamped = Math.min(AUTORED_PER_FILE, AUTORED_TOTAL - used);
+    const r = await readWorkspaceFile(dir, rel, headClamped);
+    const head = r?.content ?? "";
+    const tail =
+      (r && r.truncated) || head.length >= headClamped
+        ? `\n[isi terpotong — gunakan @@read("${rel}") untuk isi lengkap]`
+        : "";
+    used += head.length;
+    out.push(`### ${rel}\n${head}${tail}`);
+  }
+
+  return out.join("\n\n");
+}
+
 const AUTO_READ = [
   "Packages/manifest.json",
   "ProjectSettings/ProjectVersion.txt",
@@ -335,7 +368,7 @@ export async function gatherTinyFiles(
   return { files, truncated: false };
 }
 
-// ---------- Sensei MEMBUAT file / folder (agent write) ----------
+// ---------- Lode MEMBUAT file / folder (agent write) ----------
 
 export interface AgentWriteOp {
   rel: string;
@@ -487,18 +520,18 @@ function pickerArgs(tool: string, dir: string): string[] {
     return [
       "--file-selection",
       "--directory",
-      "--title=Pilih Folder Workspace (Sensei)",
+      "--title=Pilih Folder Workspace (Lode)",
       ...(dir ? [`--filename=${dir}${dir.endsWith("/") ? "" : "/"}`] : []),
     ];
   }
   if (tool === "kdialog") {
-    return ["--getexistingdirectory", dir || os.homedir(), "--title", "Pilih Folder Workspace (Sensei)"];
+    return ["--getexistingdirectory", dir || os.homedir(), "--title", "Pilih Folder Workspace (Lode)"];
   }
   // yad fallback (mendukung juga GTK dialog)
   return [
     "--file",
     "--directory",
-    "--title=Pilih Folder Workspace (Sensei)",
+    "--title=Pilih Folder Workspace (Lode)",
     ...(dir ? [`--filename=${dir}${dir.endsWith("/") ? "" : "/"}`] : []),
   ];
 }
