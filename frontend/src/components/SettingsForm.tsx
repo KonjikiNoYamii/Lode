@@ -3,7 +3,29 @@ import { get, send } from "@/api";
 import type { Profile } from "@/types";
 
 const inputCls =
-  "w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm outline-none transition focus:border-sakura/50 text-night placeholder:text-mist/60";
+  "w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm outline-none transition focus:border-sakura/50 text-night placeholder:text-mist/60 [color-scheme:dark]";
+
+const LEARNING_STYLE_INFO: Record<
+  string,
+  { label: string; desc: string }
+> = {
+  praktek: {
+    label: "Praktek langsung",
+    desc: "Lode kasih inti materi singkat dulu (±3–5 kalimat + contoh kecil), baru langsung satu soal/latihan untuk dicoba. Bukan tanpa materi sama sekali.",
+  },
+  teori: {
+    label: "Teori dulu",
+    desc: "Konsep dijelaskan tuntas dulu lengkap dengan contoh; soal latihan menyusul SETELAH materi selesai. Jadi bukan 'teori tanpa soal', tapi soal datang setelah teori.",
+  },
+  visual: {
+    label: "Visual / analogi",
+    desc: "Materi dijelaskan pakai analogi, perumpamaan, dan 'bayangkan…' supaya gampang dibayangkan.",
+  },
+  cerita: {
+    label: "Cerita & storytelling",
+    desc: "Materi dibungkus dalam narasi cerita / contoh sehari-hari supaya mudah diingat.",
+  },
+};
 
 function Field({
   label,
@@ -90,7 +112,7 @@ export default function SettingsForm() {
         ai_model: profile.ai_model,
       });
       setProfile(updated);
-      setMsg({ ok: true, text: "Profil tersimpan. Sensei akan langsung ingat update ini." });
+      setMsg({ ok: true, text: "Profil tersimpan. Lode akan langsung ingat update ini." });
     } catch (err) {
       setMsg({ ok: false, text: err instanceof Error ? err.message : "Gagal menyimpan" });
     } finally {
@@ -141,7 +163,7 @@ export default function SettingsForm() {
       <div>
         <h2 className="text-xl font-extrabold">Profil pelajar</h2>
         <p className="mt-1 text-sm text-mist">
-          Ini "memori jangka panjang" Sensei — dia akan selalu ingat ini di setiap percakapan.
+          Ini "memori jangka panjang" Lode — dia akan selalu ingat ini di setiap percakapan.
         </p>
       </div>
 
@@ -153,7 +175,7 @@ export default function SettingsForm() {
             onChange={(e) => patch("name", e.target.value)}
           />
         </Field>
-        <Field label="Nama mentor (Sensei)">
+        <Field label="Nama mentor (Lode)">
           <input
             className={inputCls}
             value={profile.mascot}
@@ -181,7 +203,13 @@ export default function SettingsForm() {
             <option value="lanjut">Lanjut</option>
           </select>
         </Field>
-        <Field label="Gaya belajar favorit">
+        <Field
+          label="Gaya belajar favorit"
+          hint={
+            LEARNING_STYLE_INFO[profile.learning_style]?.desc ??
+            "Pilih gaya yang paling cocok untukmu."
+          }
+        >
           <select
             className={inputCls}
             value={profile.learning_style}
@@ -205,7 +233,7 @@ export default function SettingsForm() {
       <div className="border-t border-white/10 pt-6">
         <h2 className="text-xl font-extrabold">Folder workspace (default)</h2>
         <p className="mt-1 text-sm text-mist">
-          Folder tempat kamu menulis jawaban/PR di code editor (mis. Zed). Sensei bisa
+          Folder tempat kamu menulis jawaban/PR di code editor (mis. Zed). Lode bisa
           membacanya untuk mengoreksi. Bisa diubah per-percakapan lewat tombol
           "Folder" di halaman chat.
         </p>
@@ -266,7 +294,7 @@ export default function SettingsForm() {
           </Field>
           <Field
             label="Otomatis baca seluruh teks (KB)"
-            hint="Kalau total isi file kecil (mis. PR latihan), Sensei langsung paham tanpa menunggu @@read. 0 = mati. Naikkan pelan, ini yang paling boros token."
+            hint="Kalau total isi file kecil (mis. PR latihan), Lode langsung paham tanpa menunggu @@read. 0 = mati. Naikkan pelan, ini yang paling boros token."
           >
             <input
               type="number"
@@ -278,7 +306,7 @@ export default function SettingsForm() {
               onChange={(e) => patch("ws_auto_kb", Number(e.target.value))}
             />
           </Field>
-          <Field label="Sensei boleh membuat file/folder" hint="Mis. diminta buat ROADMAP.md atau skrip C#. Tetap dibatasi: file teks <100KB & hanya di dalam folder workspace.">
+          <Field label="Lode boleh membuat file/folder" hint="Mis. diminta buat ROADMAP.md atau skrip C#. Tetap dibatasi: file teks <100KB & hanya di dalam folder workspace.">
             <button
               type="button"
               onClick={() => patch("ws_allow_write", profile.ws_allow_write ? 0 : 1)}
