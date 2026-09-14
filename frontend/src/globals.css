@@ -159,3 +159,124 @@ body {
   padding: 0.4rem 0.6rem;
   text-align: left;
 }
+
+/* ---------- Reading rhythm: bantu mata "bernapas" saat baca teks panjang ---------- */
+@keyframes msg-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.msg-anim {
+  animation: msg-rise 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.msg-stagger .markdown-body > :not(pre) {
+  opacity: 0;
+  animation: msg-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--si, 0) * 70ms + 80ms);
+}
+.msg-stagger .markdown-body > :nth-child(1) { --si: 0; }
+.msg-stagger .markdown-body > :nth-child(2) { --si: 1; }
+.msg-stagger .markdown-body > :nth-child(3) { --si: 2; }
+.msg-stagger .markdown-body > :nth-child(4) { --si: 3; }
+.msg-stagger .markdown-body > :nth-child(5) { --si: 4; }
+.msg-stagger .markdown-body > :nth-child(6) { --si: 5; }
+.msg-stagger .markdown-body > :nth-child(7) { --si: 6; }
+.msg-stagger .markdown-body > :nth-child(8) { --si: 7; }
+.msg-stagger .markdown-body > :nth-child(n + 9) { --si: 8; }
+
+/* heading berwarna gradien agar tidak ngeblok abu-abu */
+.markdown-body h1,
+.markdown-body h2 {
+  width: fit-content;
+  background: linear-gradient(90deg, #ff9ad0, #c9b3ff 55%, #8eeffb);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.markdown-body h2 {
+  position: relative;
+  padding-bottom: 0.28em;
+}
+.markdown-body h2::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #ff6ec7 20%,
+    #a78bfa 60%,
+    #67e8f9 85%,
+    transparent
+  );
+  background-size: 220% 100%;
+  animation: hline-sweep 5s linear infinite;
+}
+@keyframes hline-sweep {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+/* blok kode "bernapas" — oase visual di tengah teks panjang */
+.markdown-body pre {
+  animation: code-breathe 4.5s ease-in-out infinite;
+}
+@keyframes code-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(167, 139, 250, 0.1),
+      0 0 14px rgba(167, 139, 250, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(255, 110, 199, 0.16),
+      0 0 24px rgba(255, 110, 199, 0.14);
+  }
+}
+
+/* shimmer loading saat AI sedang berpikir */
+@keyframes shimmer-sweep {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+.skeleton-line {
+  height: 11px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 25%,
+    rgba(255, 255, 255, 0.14) 50%,
+    rgba(255, 255, 255, 0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 1.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-anim,
+  .msg-stagger .markdown-body > :not(pre),
+  .markdown-body pre,
+  .markdown-body h2::after,
+  .skeleton-line {
+    animation: none !important;
+    opacity: 1 !important;
+  }
+}

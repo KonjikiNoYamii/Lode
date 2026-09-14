@@ -406,6 +406,7 @@ export default function ChatRoom({
   }
 
   const empty = messages.length === 0 && !live;
+  const lastId = messages.length > 0 ? messages[messages.length - 1].id : null;
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-panel/60 md:flex-row">
@@ -562,7 +563,7 @@ export default function ChatRoom({
               ) : (
                 <div key={m.id} className="flex items-start gap-2.5">
                   <MiniAvatar mood={isMood(m.mood) ? m.mood : "netral"} />
-                  <div className="min-w-0 max-w-[85%] flex-1 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3 sm:max-w-[80%]">
+                  <div className={`min-w-0 max-w-[85%] flex-1 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3 sm:max-w-[80%] msg-anim${lastId === m.id ? " msg-stagger" : ""}`}>
                     <Markdown>{m.content}</Markdown>
                   </div>
                 </div>
@@ -582,10 +583,18 @@ export default function ChatRoom({
             {sending && !live && (
               <div className="flex items-start gap-2.5">
                 <MiniAvatar mood={mood} />
-                <div className="flex items-center gap-1 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3 text-sm text-mist">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sakura" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-mew [animation-delay:150ms]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-akari [animation-delay:300ms]" />
+                <div className="flex min-w-0 flex-1 flex-col gap-2.5 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3">
+                  <div className="flex items-center gap-1.5 text-sm text-mist">
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sakura" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-mew [animation-delay:150ms]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-akari [animation-delay:300ms]" />
+                    <span className="ml-1 text-xs">sedang berpikir…</span>
+                  </div>
+                  <div className="w-full space-y-2">
+                    <div className="skeleton-line w-full" />
+                    <div className="skeleton-line w-11/12" />
+                    <div className="skeleton-line w-3/4" />
+                  </div>
                 </div>
               </div>
             )}
