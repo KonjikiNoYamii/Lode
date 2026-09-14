@@ -400,7 +400,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return await streamChat(round1Payload(), resumeThread, resumeSession);
       } catch (err) {
         throw new Error(
-          "Tidak bisa terhubung ke gemini-server. Pastikan server kamu jalan & cookie Gemini valid.",
+          "Tidak bisa terhubung ke server AI. Pastikan server AI kamu jalan & konfigurasinya benar.",
         );
       }
     };
@@ -412,7 +412,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const msg = err instanceof Error ? err.message : String(err);
       return sendJson(res, 502, {
         error:
-          "Tidak bisa terhubung ke gemini-server. Pastikan server kamu jalan & cookie Gemini valid.",
+          "Tidak bisa terhubung ke server AI. Pastikan server AI kamu jalan & konfigurasinya benar.",
         detail: msg,
       });
     }

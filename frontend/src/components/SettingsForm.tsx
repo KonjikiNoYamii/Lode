@@ -135,7 +135,7 @@ export default function SettingsForm() {
         setTest({
           ok: true,
           text: `Server AI hidup (status ${r.upstream_status}). ${
-            r.body?.client_ready === false ? "Tapi client Gemini belum siap — cek cookie di gemini-server." : ""
+            r.body?.client_ready === false ? "Tapi server AI belum siap — cek API key/konfigurasi server." : ""
           }`,
         });
       } else {
@@ -325,7 +325,7 @@ export default function SettingsForm() {
       <div className="border-t border-white/10 pt-6">
         <h2 className="text-xl font-extrabold">Server AI</h2>
         <p className="mt-1 text-sm text-mist">
-          Endpoint OpenAI-compatible. Default-nya gemini-server kamu di port 8000.
+          Endpoint OpenAI-compatible. Default-nya gemini-api-server di port 8002.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="AI server URL">
@@ -333,7 +333,7 @@ export default function SettingsForm() {
               className={inputCls}
               value={profile.ai_base_url}
               onChange={(e) => patch("ai_base_url", e.target.value)}
-              placeholder="http://localhost:8000/v1"
+              placeholder="http://localhost:8002/v1"
             />
           </Field>
           <Field label="API key (opsional)">

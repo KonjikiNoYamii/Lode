@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS profile (
   learning_style TEXT NOT NULL DEFAULT 'praktek',
   mascot TEXT NOT NULL DEFAULT 'Lode',
   workspace TEXT NOT NULL DEFAULT '',
-  ai_base_url TEXT NOT NULL DEFAULT 'http://localhost:8000/v1',
+  ai_base_url TEXT NOT NULL DEFAULT 'http://localhost:8002/v1',
   ai_api_key TEXT NOT NULL DEFAULT '',
   ai_model TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -223,7 +223,7 @@ const ENV_BASE_URL = process.env.GEMINI_SERVER_BASE_URL;
 
 function rowToProfile(row: unknown): Profile {
   const r = row as Profile;
-  if (ENV_BASE_URL && r.ai_base_url === "http://localhost:8000/v1") {
+  if (ENV_BASE_URL && r.ai_base_url === "http://localhost:8002/v1") {
     return { ...r, ai_base_url: ENV_BASE_URL };
   }
   return r;

@@ -6,14 +6,13 @@ App pribadi untuk belajar programming dengan bantuan AI yang **satu mentor, kons
 
 ```
 sensei-mentor/
-├── backend/          # API + database (Node murni, tanpa framework)
-│   ├── server/       # HTTP server (node:http) + semua route API
-│   └── lib/          # db (SQLite node:sqlite), ai client, template memori mentor
-├── frontend/         # UI (Vite + React + TypeScript + Tailwind)
-│   └── src/          # App, Chat, Sidebar, Settings, komponen tema anime
-├── gemini-api-server/ # Gemini API server (port 8002, pakai Google AI Studio key)
-├── openrouter-server/ # OpenRouter server (port 8010, pakai OpenRouter API key)
-└── gemini-server/     # Gemini web server (port 8000, pakai cookie Gemini web)
+├── backend/              # API + database (Node murni, tanpa framework)
+│   ├── server/           # HTTP server (node:http) + semua route API
+│   └── lib/              # db (SQLite node:sqlite), ai client, template memori mentor
+├── frontend/             # UI (Vite + React + TypeScript + Tailwind)
+│   └── src/              # App, Chat, Sidebar, Settings, komponen tema anime
+├── gemini-api-server/    # Gemini API server (Google AI Studio key)
+└── openrouter-server/    # OpenRouter server (OpenRouter API key)
 ```
 
 ## Cara pakai
@@ -26,9 +25,8 @@ Lode mendukung beberapa backend AI. Pilih salah satu (atau jalankan beberapa sek
 |--------|------|-----------|------------|
 | `gemini-api-server` | 8002 | Google AI Studio API key | Gratis, stabil, model `gemini-3.5-flash-lite` |
 | `openrouter-server` | 8010 | OpenRouter API key | Banyak model, beberapa gratis |
-| `gemini-server` | 8000 | Cookie Gemini web | Gratis, tapi cookie expiry perlu refresh |
 
-**Rekomendasi**: `gemini-api-server` — gratis, tidak perlu cookie, stabil.
+**Rekomendasi**: `gemini-api-server` — gratis, stabil, pakai API resmi Google.
 
 #### gemini-api-server (recommended)
 
@@ -50,14 +48,6 @@ python3 -m venv venv
 systemctl --user start openrouter-server
 ```
 
-#### gemini-server (cookie)
-
-```bash
-cd gemini-server
-# Edit .env → isi SECURE_1PSID dan SECURE_1PSIDTS dari browser
-systemctl --user start gemini-server
-```
-
 ### 2. Install
 
 ```bash
@@ -72,7 +62,7 @@ npm run dev:full
 
 - Frontend: http://localhost:5173
 - API: http://localhost:8787 (auto-diproxy oleh Vite ke `/api`)
-- AI server: http://localhost:8002 (atau :8010 / :8000 tergantung yang dipakai)
+- AI server: http://localhost:8002 (atau :8010 tergantung yang dipakai)
 
 > Nama kamu otomatis diambil dari username Linux — tidak perlu mengetik lagi.
 
@@ -131,7 +121,6 @@ Pengamanan: folder `node_modules`, `.git`, `dist`, file biner & file besar (>400
 - 8787 — API server (backend)
 - 8002 — gemini-api-server (Google AI Studio)
 - 8010 — openrouter-server (OpenRouter)
-- 8000 — gemini-server (cookie Gemini web)
 
 ## Systemd services
 
@@ -139,10 +128,10 @@ Semua server AI bisa dijalankan sebagai service:
 
 ```bash
 # Enable & start
-systemctl --user enable --now gemini-api-server openrouter-server gemini-server
+systemctl --user enable --now gemini-api-server openrouter-server
 
 # Status
-systemctl --user status gemini-api-server openrouter-server gemini-server
+systemctl --user status gemini-api-server openrouter-server
 
 # Logs
 journalctl --user -u gemini-api-server -f
