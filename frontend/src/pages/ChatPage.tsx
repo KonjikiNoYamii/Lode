@@ -100,9 +100,8 @@ export default function ChatPage() {
         await send(`/api/conversations/${id}`, "DELETE");
         if (currentId === id) {
           newChat();
-        } else {
-          await refresh(currentId);
         }
+        await refresh(currentId === id ? null : currentId);
       } catch {
         // gagal hapus
       }

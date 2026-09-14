@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { Memory, Message, Mood, Profile, Topic } from "@/types";
 import { GraduationCap, BookOpen } from "lucide-react";
 import { Markdown } from "./Markdown";
@@ -76,6 +76,52 @@ const SUGGESTIONS = [
   "Buatkan roadmap belajar web dev untukku",
 ];
 
+function Composer({
+  sending,
+  onSend,
+  textareaRef,
+}: {
+  sending: boolean;
+  onSend: (raw: string) => void;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+}) {
+  const [text, setText] = useState("");
+
+  const submit = () => {
+    const t = text.trim();
+    if (!t || sending) return;
+    setText("");
+    onSend(t);
+    textareaRef.current?.focus();
+  };
+
+  return (
+    <div className="glass flex items-end gap-2 rounded-2xl p-2">
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        rows={1}
+        placeholder="Tanya Lode apa saja… (Shift+Enter = baris baru)"
+        className="max-h-40 min-h-[42px] flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-mist/70"
+      />
+      <button
+        onClick={submit}
+        disabled={sending || !text.trim()}
+        className="shrink-0 rounded-xl bg-gradient-to-r from-sakura to-mew px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-sakura/20 transition enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Kirim
+      </button>
+    </div>
+  );
+}
+
 function MiniAvatar({ mood }: { mood: Mood }) {
   const candidates = useMemo(() => getCandidateUrls(mood), [mood]);
   const [candidateIdx, setCandidateIdx] = useState(0);
@@ -118,7 +164,6 @@ export default function ChatRoom({
   onOpenSidebar,
   onSetFolder,
 }: Props) {
-  const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [live, setLive] = useState("");
   const [error, setError] = useState("");
@@ -135,7 +180,7 @@ export default function ChatRoom({
   const sendingRef = useRef<HTMLTextAreaElement>(null);
   const prevLastMsgIdRef = useRef<number | undefined>(undefined);
 
-  const mascotName = profile?.mascot || "Sensei";
+  const mascotName = profile?.mascot || "Lode";
 
   const handleLoadEarlier = async () => {
     if (!onLoadEarlier || loadingEarlier) return;
@@ -182,7 +227,7 @@ export default function ChatRoom({
       const j = (await r.json()) as { ok: boolean; fileCount?: number; error?: string };
       setFolderInfo(
         j.ok
-          ? { ok: true, text: `Folder valid — ${j.fileCount ?? 0} file terdeteksi. Sensei bisa membacanya.` }
+          ? { ok: true, text: `Folder valid — ${j.fileCount ?? 0} file terdeteksi. Lode bisa membacanya.` }
           : { ok: false, text: j.error ?? "Folder tidak valid" },
       );
     } catch (err) {
@@ -239,10 +284,9 @@ export default function ChatRoom({
   }
 
   async function send(raw?: string) {
-    const msg = (raw ?? input).trim();
+    const msg = (raw ?? "").trim();
     if (!msg || sending) return;
 
-    setInput("");
     setError("");
     setSending(true);
     setLive("");
@@ -408,7 +452,7 @@ export default function ChatRoom({
           <div className="w-full max-w-md rounded-2xl border border-white/10 bg-panel p-5 shadow-2xl">
             <h3 className="text-lg font-extrabold">Folder workspace</h3>
             <p className="mt-1 text-xs text-mist">
-              Tempat kamu menulis jawaban/PR di code editor (mis. Zed). Sensei hanya
+              Tempat kamu menulis jawaban/PR di code editor (mis. Zed). Lode hanya
               baca, tidak menulis — kamu yang nulis di editor kamu.
             </p>
             <input
@@ -473,7 +517,7 @@ export default function ChatRoom({
             <MentorAvatar name={mascotName} mood={mood} />
             <div>
               <div className="text-xl font-extrabold">
-                {profile?.mascot || "Sensei"} siap membantumu
+                {profile?.mascot || "Lode"} siap membantumu
               </div>
               <p className="mt-1 text-sm text-mist">
                 Ketik apa pun seperti biasa{" "}
@@ -558,29 +602,7 @@ export default function ChatRoom({
 
       {/* composer */}
       <div className="border-t border-white/10 px-4 py-3">
-        <div className="glass flex items-end gap-2 rounded-2xl p-2">
-          <textarea
-            ref={sendingRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            rows={1}
-            placeholder="Tanya Sensei apa saja… (Shift+Enter = baris baru)"
-            className="max-h-40 min-h-[42px] flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-mist/70"
-          />
-          <button
-            onClick={() => send()}
-            disabled={sending || !input.trim()}
-            className="shrink-0 rounded-xl bg-gradient-to-r from-sakura to-mew px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-sakura/20 transition enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Kirim
-          </button>
-        </div>
+        <Composer sending={sending} onSend={send} textareaRef={sendingRef} />
       </div>
       </div>
 
