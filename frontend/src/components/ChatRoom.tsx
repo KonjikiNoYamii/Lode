@@ -32,7 +32,8 @@ function FilterChip({
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold transition ${
+      aria-pressed={active}
+      className={`flex shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-bold transition active:scale-95 ${
         active
           ? "border-mew/40 bg-mew/10 text-mew"
           : "border-white/10 bg-white/5 text-mist hover:border-white/25"
@@ -846,7 +847,7 @@ export default function ChatRoom({
           aria-modal="true"
         >
           <div
-            className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-panel shadow-2xl sm:rounded-2xl"
+            className="flex h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-panel shadow-2xl sm:h-[80vh] sm:rounded-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-3.5">
