@@ -1,6 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import type { Memory, Message, Mood, Profile, Topic } from "@/types";
-import { GraduationCap, BookOpen } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import type { Memory, Message, Mood, Profile, Topic, TopicStatus } from "@/types";
+import { GraduationCap, BookOpen, Search, X } from "lucide-react";
 import { Markdown } from "./Markdown";
 import MentorAvatar, {
   MOODS,
@@ -8,6 +15,34 @@ import MentorAvatar, {
   getCandidateUrls,
 } from "./MentorAvatar";
 import { STATUS_META } from "./status";
+
+const STATUS_ORDER: TopicStatus[] = ["mastered", "learning", "stuck", "todo"];
+
+function FilterChip({
+  active,
+  dot,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  dot?: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold transition ${
+        active
+          ? "border-mew/40 bg-mew/10 text-mew"
+          : "border-white/10 bg-white/5 text-mist hover:border-white/25"
+      }`}
+    >
+      {dot && <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
+      {children}
+    </button>
+  );
+}
 
 function isMood(v: string | undefined): v is Mood {
   return !!v && (MOODS as string[]).includes(v);
@@ -176,11 +211,41 @@ export default function ChatRoom({
   const [folderSaving, setFolderSaving] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [mood, setMood] = useState<Mood>("netral");
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [topicsQuery, setTopicsQuery] = useState("");
+  const [topicsFilter, setTopicsFilter] = useState<TopicStatus | "all">("all");
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef<HTMLTextAreaElement>(null);
   const prevLastMsgIdRef = useRef<number | undefined>(undefined);
 
   const mascotName = profile?.mascot || "Lode";
+
+  const statusCounts = useMemo(() => {
+    const c: Record<TopicStatus, number> = { mastered: 0, learning: 0, stuck: 0, todo: 0 };
+    for (const t of topics) c[t.status] = (c[t.status] ?? 0) + 1;
+    return c;
+  }, [topics]);
+
+  const sortedTopics = useMemo(
+    () =>
+      [...topics].sort((a, b) =>
+        (b.updated_at ?? "").localeCompare(a.updated_at ?? ""),
+      ),
+    [topics],
+  );
+
+  const recentTopics = sortedTopics.slice(0, 6);
+
+  const filteredDetailTopics = useMemo(() => {
+    const q = topicsQuery.trim().toLowerCase();
+    return sortedTopics.filter((t) => {
+      if (topicsFilter !== "all" && t.status !== topicsFilter) return false;
+      if (q && !t.name.toLowerCase().includes(q) && !(t.notes ?? "").toLowerCase().includes(q)) {
+        return false;
+      }
+      return true;
+    });
+  }, [sortedTopics, topicsQuery, topicsFilter]);
 
   const handleLoadEarlier = async () => {
     if (!onLoadEarlier || loadingEarlier) return;
@@ -644,7 +709,7 @@ export default function ChatRoom({
 
         {/* Bagian Bawah: Progress Belajar & Catatan Mentor (INDEPENDENTLY SCROLLABLE) */}
         <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-5">
-          {/* Section: Progress Belajar */}
+{/* Section: Progress Belajar */}
           <section>
             <div className="mb-2.5 flex items-center justify-between px-1">
               <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-mist">
@@ -652,9 +717,15 @@ export default function ChatRoom({
                 <span>Progress Belajar</span>
               </div>
               {topics.length > 0 && (
-                <span className="text-[10px] font-medium text-mist/60">
-                  {topics.length} topik
-                </span>
+                <button
+                  onClick={() => {
+                    setTopicsFilter("all");
+                    setDetailOpen(true);
+                  }}
+                  className="text-[10px] font-bold text-mew transition hover:text-mew/80"
+                >
+                  Detail • {topics.length}
+                </button>
               )}
             </div>
 
@@ -663,38 +734,77 @@ export default function ChatRoom({
                 Belum ada catatan topik untuk sesi ini. Progress akan tercatat otomatis saat belajar.
               </div>
             ) : (
-              <ul className="space-y-2.5">
-                {topics.map((t) => {
-                  const meta = STATUS_META[t.status];
-                  return (
-                    <li
-                      key={t.id}
-                      className="rounded-xl border border-white/10 bg-panel2/60 p-3.5 shadow-sm transition hover:border-white/20"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-2 min-w-0">
+              <>
+                <div className="mb-3 grid grid-cols-4 gap-1.5 px-0.5">
+                  {STATUS_ORDER.map((s) => {
+                    const meta = STATUS_META[s];
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => {
+                          setTopicsFilter(s);
+                          setDetailOpen(true);
+                        }}
+                        className="rounded-lg border border-white/10 bg-panel2/60 px-1 py-1.5 text-center transition hover:border-white/25"
+                        title={`Lihat ${meta.label}`}
+                      >
+                        <div className="flex items-center justify-center gap-1 text-[10px] font-bold text-night">
+                          <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+                          {statusCounts[s]}
+                        </div>
+                        <div className="truncate text-[8px] font-medium text-mist/70">
+                          {meta.label}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <ul className="space-y-2.5">
+                  {recentTopics.map((t) => {
+                    const meta = STATUS_META[t.status];
+                    return (
+                      <li
+                        key={t.id}
+                        className="rounded-xl border border-white/10 bg-panel2/60 p-3.5 shadow-sm transition hover:border-white/20"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
+                            />
+                            <span className="text-xs font-bold text-night break-words">
+                              {t.name}
+                            </span>
+                          </div>
                           <span
-                            className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
-                          />
-                          <span className="text-xs font-bold text-night break-words">
-                            {t.name}
+                            className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold ${meta.chip}`}
+                          >
+                            {meta.label}
                           </span>
                         </div>
-                        <span
-                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold ${meta.chip}`}
-                        >
-                          {meta.label}
-                        </span>
-                      </div>
-                      {t.notes && (
-                        <p className="mt-2 text-xs leading-relaxed text-mist/90 border-t border-white/5 pt-2 whitespace-pre-wrap break-words">
-                          {t.notes}
-                        </p>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                        {t.notes && (
+                          <p className="mt-2 text-xs leading-relaxed text-mist/90 border-t border-white/5 pt-2 whitespace-pre-wrap break-words">
+                            {t.notes}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                {topics.length > recentTopics.length && (
+                  <button
+                    onClick={() => {
+                      setTopicsFilter("all");
+                      setDetailOpen(true);
+                    }}
+                    className="mt-2.5 w-full rounded-lg border border-dashed border-white/15 py-2 text-[10px] font-bold text-mist transition hover:border-mew/40 hover:text-mew"
+                  >
+                    Lihat semua {topics.length} topik →
+                  </button>
+                )}
+              </>
             )}
           </section>
 
@@ -727,6 +837,117 @@ export default function ChatRoom({
           )}
         </div>
       </div>
+
+      {detailOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
+          onClick={() => setDetailOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-panel shadow-2xl sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-3.5">
+              <div className="flex items-center gap-2">
+                <GraduationCap className="h-4 w-4 text-mew" />
+                <h3 className="text-sm font-extrabold text-night">
+                  Detail Progress
+                </h3>
+                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-bold text-mist">
+                  {topics.length} topik
+                </span>
+              </div>
+              <button
+                onClick={() => setDetailOpen(false)}
+                className="rounded-full p-1.5 text-mist transition hover:bg-white/10 hover:text-night"
+                aria-label="Tutup"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5 border-b border-white/10 px-5 py-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-mist/60" />
+                <input
+                  value={topicsQuery}
+                  onChange={(e) => setTopicsQuery(e.target.value)}
+                  placeholder="Cari topik…"
+                  className="w-full rounded-lg border border-white/10 bg-panel2/60 py-2 pl-9 pr-3 text-xs text-night placeholder:text-mist/50 focus:border-mew/50 focus:outline-none"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <FilterChip
+                  active={topicsFilter === "all"}
+                  onClick={() => setTopicsFilter("all")}
+                >
+                  Semua ({topics.length})
+                </FilterChip>
+                {STATUS_ORDER.map((s) => (
+                  <FilterChip
+                    key={s}
+                    active={topicsFilter === s}
+                    dot={STATUS_META[s].dot}
+                    onClick={() => setTopicsFilter(s)}
+                  >
+                    {STATUS_META[s].label} ({statusCounts[s]})
+                  </FilterChip>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 space-y-2.5 overflow-y-auto px-5 py-4">
+              {filteredDetailTopics.length === 0 ? (
+                <div className="rounded-xl border border-white/5 bg-white/[0.02] p-6 text-center text-xs text-mist/70">
+                  Tidak ada topik yang cocok.
+                </div>
+              ) : (
+                filteredDetailTopics.map((t) => {
+                  const meta = STATUS_META[t.status];
+                  return (
+                    <div
+                      key={t.id}
+                      className="rounded-xl border border-white/10 bg-panel2/60 p-3.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
+                          />
+                          <span className="text-xs font-bold text-night break-words">
+                            {t.name}
+                          </span>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold ${meta.chip}`}
+                        >
+                          {meta.label}
+                        </span>
+                      </div>
+                      {t.notes && (
+                        <p className="mt-2 text-xs leading-relaxed text-mist/90 border-t border-white/5 pt-2 whitespace-pre-wrap break-words">
+                          {t.notes}
+                        </p>
+                      )}
+                      {t.updated_at && (
+                        <div className="mt-1.5 text-[9px] font-medium text-mist/50">
+                          Diperbarui{" "}
+                          {new Date(t.updated_at).toLocaleString("id-ID", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
