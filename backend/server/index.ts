@@ -28,8 +28,8 @@ import {
   upsertWorkspaceFile,
 } from "../lib/db";
 import {
+  aiRequestHeaders,
   chatText,
-  parseAiThread,
   streamChat,
   type AiThread,
   type ChatItem,
@@ -53,6 +53,8 @@ import {
 } from "../lib/workspace";
 
 const PORT = Number(process.env.PORT ?? 8787);
+const HOST = process.env.BACKEND_HOST?.trim() || "127.0.0.1";
+const AI_ERROR_MARKER = "@@ai-error:";
 const DIST_PATH = path.resolve(
   process.env.FRONTEND_DIST ??
     path.join(process.cwd(), "..", "frontend", "dist"),
@@ -125,15 +127,34 @@ function clampInt(value: unknown, lo: number, hi: number, dflt: number): number 
   return Math.max(lo, Math.min(hi, n));
 }
 
-function sendJson(res: ServerResponse, status: number, obj: unknown): void {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+function sendJson(
+  res: ServerResponse,
+  status: number,
+  obj: unknown,
+  headers: Record<string, string> = {},
+): void {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    ...headers,
+  });
   res.end(JSON.stringify(obj));
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
+  const maxBytes = 1_000_000;
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c as Buffer));
+    let size = 0;
+    req.on("data", (chunk) => {
+      const buffer = chunk as Buffer;
+      size += buffer.length;
+      if (size > maxBytes) {
+        reject(new Error("Request body terlalu besar"));
+        req.destroy();
+        return;
+      }
+      chunks.push(buffer);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
@@ -147,6 +168,23 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
+  }
+}
+
+let chatQueue: Promise<void> = Promise.resolve();
+
+function beginChatTurn(): { ready: Promise<void>; release: () => void } {
+  const ready = chatQueue;
+  let release = () => {};
+  chatQueue = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { ready, release };
+}
+
+function writeAiError(res: ServerResponse, message: string): void {
+  if (!res.writableEnded) {
+    res.write(`\n\n${AI_ERROR_MARKER}${encodeURIComponent(message)}\n`);
   }
 }
 
@@ -225,8 +263,7 @@ function stripMarkers(text: string): string {
 async function forgetGeminiSession(sessionId: string): Promise<boolean> {
   const profile = getProfile();
   const base = profile.ai_base_url.replace(/\/v1\/?$/, "");
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (profile.ai_api_key) headers["Authorization"] = `Bearer ${profile.ai_api_key}`;
+  const headers = aiRequestHeaders();
   try {
     const r = await fetch(`${base}/v1/sessions/delete`, {
       method: "POST",
@@ -294,10 +331,25 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const message = String(body.message ?? "").trim();
     if (!message) return sendJson(res, 400, { error: "Pesan kosong" });
 
-    let cid = Number(body.conversationId) || 0;
+    const requestedCid =
+      body.conversationId === undefined || body.conversationId === null || body.conversationId === ""
+        ? 0
+        : Number(body.conversationId);
+    if (!Number.isSafeInteger(requestedCid) || requestedCid < 0) {
+      return sendJson(res, 400, { error: "conversationId tidak valid" });
+    }
+
+    const chatTurn = beginChatTurn();
+    await chatTurn.ready;
+    if (res.destroyed) {
+      chatTurn.release();
+      return;
+    }
+    res.once("finish", chatTurn.release);
+    res.once("close", chatTurn.release);
+    let cid = requestedCid;
     let title: string | null = null;
     let folder = "";
-    let resumeThread: AiThread | null = null;
     let resumeSession = "";
     if (!cid) {
       title = message.length > 36 ? `${message.slice(0, 36)}…` : message;
@@ -306,15 +358,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       cid = createConversation(title, folder, resumeSession);
     } else {
       const conv = getConversation(cid);
-      if (conv) {
-        folder = String(conv.folder ?? "").trim();
-        resumeThread = parseAiThread(String(conv.ai_thread ?? ""));
-        resumeSession = String(conv.ai_session ?? "").trim();
-        if (!resumeSession) {
-          // percakapan lama tanpa sesi — beri sesi sendiri agar terisolasi dari yang lain
-          resumeSession = randomUUID();
-          patchConversation(cid, { ai_session: resumeSession });
-        }
+      if (!conv) {
+        return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+      }
+      folder = String(conv.folder ?? "").trim();
+      if (String(conv.ai_thread ?? "").trim()) {
+        patchConversation(cid, { ai_thread: "" });
+      }
+      resumeSession = String(conv.ai_session ?? "").trim();
+      if (!resumeSession) {
+        resumeSession = randomUUID();
+        patchConversation(cid, { ai_session: resumeSession });
       }
     }
     addMessage(cid, "user", message);
@@ -365,26 +419,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       authoredCtx,
     );
 
-    // Thread gemini (percakapan kontinyu) → jangan kirim ulang riwayat, cukup pesan terbaru.
-    // Tanpa thread (percakapan baru) → kirim riwayat lengkap seperti sebelum-sebelumnya.
-    const withThread = resumeThread !== null && !!resumeThread?.cid && history.length > 0;
     const round1Payload = (): ChatItem[] => {
       const items: ChatItem[] = [{ role: "system", content: system }];
-      if (withThread) {
-        items.push({ role: "user", content: message });
-      } else {
-        for (const m of history) items.push({ role: m.role, content: m.content });
-      }
+      for (const m of history) items.push({ role: m.role, content: m.content });
       return items;
     };
     const round2Payload = (extra: string): ChatItem[] => {
       const items: ChatItem[] = [{ role: "system", content: system }];
-      if (withThread) {
-        items.push({ role: "user", content: extra });
-      } else {
-        for (const m of history) items.push({ role: m.role, content: m.content });
-        items.push({ role: "user", content: extra });
-      }
+      for (const m of history) items.push({ role: m.role, content: m.content });
+      items.push({ role: "user", content: extra });
       return items;
     };
 
@@ -395,9 +438,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     };
     if (title) headers["X-Conversation-Title"] = encodeURIComponent(title);
 
+    const clientAbort = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) clientAbort.abort();
+    });
+
     const getUpstream = async (): Promise<ReadableStream<Uint8Array>> => {
       try {
-        return await streamChat(round1Payload(), resumeThread, resumeSession);
+        return await streamChat(
+          round1Payload(),
+          null,
+          resumeSession,
+          clientAbort.signal,
+        );
       } catch (err) {
         throw new Error(
           "Tidak bisa terhubung ke server AI. Pastikan server AI kamu jalan & konfigurasinya benar.",
@@ -410,11 +463,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       upstream = await getUpstream();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return sendJson(res, 502, {
-        error:
-          "Tidak bisa terhubung ke server AI. Pastikan server AI kamu jalan & konfigurasinya benar.",
-        detail: msg,
-      });
+      return sendJson(
+        res,
+        502,
+        {
+          error:
+            "Tidak bisa terhubung ke server AI. Pastikan server AI kamu jalan & konfigurasinya benar.",
+          detail: msg,
+        },
+        title
+          ? {
+              "X-Conversation-Id": String(cid),
+              "X-Conversation-Title": encodeURIComponent(title),
+            }
+          : { "X-Conversation-Id": String(cid) },
+      );
     }
 
     res.writeHead(200, headers);
@@ -477,8 +540,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
                   }
                   const delta = j.choices?.[0]?.delta?.content ?? "";
                   if (!delta) continue;
-                  detectMarkers(delta);
                   full += delta;
+                  detectMarkers(full);
 
                   if (mode === "collect") {
                     if (markers.size > 0) {
@@ -500,8 +563,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             }
             resolve({ full, streamError, mode, markers, thread });
           } catch (err) {
-            const msg = err instanceof Error ? err.message : "Stream terputus";
-            if (!res.writableEnded) res.write(`\n\n[error] ${msg}`);
+            streamError = err instanceof Error ? err.message : "Stream terputus";
             resolve({ full, streamError, mode, markers, thread });
           } finally {
             try {
@@ -514,24 +576,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         void run();
       });
 
-    let r1thread = resumeThread;
-    let round1 = await parseRound1(upstream);
-    // Thread gemini lama bisa kedaluarsa (dihapus/diarsipkan Google) → ulang tanpa thread
-    if (
-      round1.streamError &&
-      resumeThread &&
-      round1.mode === "collect" &&
-      !round1.full
-    ) {
-      resumeThread = null;
-      try {
-        const retryUp = await streamChat(round1Payload(), null, resumeSession);
-        round1 = await parseRound1(retryUp);
-      } catch {
-        // biarkan error pertama
-      }
-    }
+    let r1thread: AiThread | null = null;
+    const round1 = await parseRound1(upstream);
     if (round1.thread) r1thread = round1.thread;
+    let providerError = round1.streamError;
 
     const parsed = parseAgentBlocks(round1.full);
 
@@ -574,7 +622,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       try {
         const extra = `Pelajar meminta kamu membaca file. Gunakan isi file di bawah.\n${dump}${writeNotes}\n\nJawab pertanyaan pelajar sekarang memakai isi file itu. JANGAN menulis marker @@read lagi${wantsWrites ? " (berkas sudah diproses, jangan tulis blok @@write lagi)" : ""}.`;
-        const round2 = await streamChat(round2Payload(extra), r1thread, resumeSession);
+        const round2 = await streamChat(
+          round2Payload(extra),
+          r1thread,
+          resumeSession,
+          clientAbort.signal,
+        );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
           if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d)));
@@ -596,21 +649,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         } else {
           finalText = stripMarkers(r2Parsed.clean).trim() || finalText;
         }
-        if (r2.streamError && !finalText) {
-          if (!res.writableEnded) res.write(`\n\n[server error] ${r2.streamError}`);
-        }
+        if (r2.streamError) providerError = r2.streamError;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!res.writableEnded) res.write(`\n\n[error membaca file] ${msg}`);
+        providerError = err instanceof Error ? err.message : "Gagal membaca file";
       }
       if (writeNotes) {
         finalText = `${finalText}\n> ${writeNotes.trim()}`.trim();
       }
     } else if (writeNotes) {
       finalText = `${finalText}\n> ${writeNotes.trim()}`.trim();
-    } else if (round1.streamError && !finalText) {
-      finalText = `[Gagal terhubung ke server AI (${round1.streamError}). Mohon coba lagi.]`;
-      if (!res.writableEnded) res.write(`\n\n> ${finalText}`);
     }
 
     // round tambahan: pelajar minta membuat berkas, tapi Lode belum menulisnya
@@ -633,7 +680,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       try {
         const extra =
           "Pelajar meminta kamu membuat/menulis berkas di workspace, tapi jawabanmu tadi TIDAK berisi blok pembuatan berkas (file tidak jadi dibuat). SEKARANG keluarkan HANYA SATU blok:\n@@write(\"path/relatif/NamaBerkas.ext\")\n<isi berkas lengkap>\n@@end\nTanpa teks lain. Blok itu yang akan dieksekusi sistem untuk menulis berkas.";
-        const round2 = await streamChat(round2Payload(extra), r1thread, resumeSession);
+        const round2 = await streamChat(
+          round2Payload(extra),
+          r1thread,
+          resumeSession,
+          clientAbort.signal,
+        );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
           if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d)));
@@ -658,9 +710,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           finalText = `${finalText}\n${msg}`.trim();
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!res.writableEnded) res.write(`\n\n[error membuat berkas] ${msg}`);
+        providerError = err instanceof Error ? err.message : "Gagal membuat berkas";
       }
+    }
+
+    if (clientAbort.signal.aborted) {
+      if (!res.writableEnded) res.end();
+      return;
+    }
+
+    if (providerError) {
+      writeAiError(res, providerError);
+      if (!res.writableEnded) res.end();
+      return;
     }
 
     if (finalText && !res.writableEnded) {
@@ -686,10 +748,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const profile = getProfile();
     const upstreamUrl = `${profile.ai_base_url.replace(/\/v1\/?$/, "")}/health`;
     try {
-      const r = await fetch(upstreamUrl, { signal: AbortSignal.timeout(6000) });
+      const r = await fetch(upstreamUrl, {
+        headers: aiRequestHeaders(),
+        signal: AbortSignal.timeout(6000),
+      });
       const body = await r.json().catch(() => null);
+      const health = body as { client_ready?: boolean } | null;
       return sendJson(res, 200, {
-        ok: r.ok,
+        ok: r.ok && health?.client_ready !== false,
         upstream_status: r.status,
         upstream_url: upstreamUrl,
         body,
@@ -813,6 +879,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const convProgressMatch = p.match(/^\/api\/conversations\/(\d+)\/progress$/);
   if (convProgressMatch && method === "GET") {
     const cid = Number(convProgressMatch[1]);
+    if (!getConversation(cid)) {
+      return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    }
     return sendJson(res, 200, {
       conversation_id: cid,
       topics: listTopicsByConversation(cid),
@@ -822,6 +891,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const convMatch = p.match(/^\/api\/conversations\/(\d+)$/);
   if (convMatch) {
     const cid = Number(convMatch[1]);
+    const conv = getConversation(cid);
+    if (!conv) {
+      return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    }
     if (method === "GET") {
       const limitParam = url.searchParams.get("limit");
       const beforeParam = url.searchParams.get("before");
@@ -833,7 +906,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         conversation_id: cid,
         total_messages: totalMessages,
         messages,
-        folder: getConversation(cid)?.folder ?? "",
+        folder: conv.folder,
       });
     }
     if (method === "PATCH") {
@@ -845,8 +918,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return sendJson(res, 200, { ok: true });
     }
     if (method === "DELETE") {
-      const conv = getConversation(cid);
-      const sessionId = conv?.ai_session ?? "";
+      const sessionId = conv.ai_session;
       deleteConversation(cid);
       if (sessionId) {
         forgetGeminiSession(sessionId).catch(() => {});
@@ -906,6 +978,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const body = await readJson(req);
     const cid = Number(body.conversationId) || 0;
     if (!cid) return sendJson(res, 400, { error: "conversationId diperlukan" });
+    if (!getConversation(cid)) {
+      return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    }
+    const chatTurn = beginChatTurn();
+    await chatTurn.ready;
+    if (res.destroyed) {
+      chatTurn.release();
+      return;
+    }
+    res.once("finish", chatTurn.release);
+    res.once("close", chatTurn.release);
 
     const msgs = listMessages(cid);
     if (msgs.length < 2) {
@@ -960,8 +1043,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   sendJson(res, 404, { error: "Route tidak ditemukan" });
 }
 
-server.listen(PORT, () => {
-  console.log(`[lode] API server jalan di http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`[lode] API server jalan di http://${HOST}:${PORT}`);
   console.log(`[lode] AI endpoint: ${getProfile().ai_base_url}/chat/completions`);
   try {
     const r = runMaintenance();

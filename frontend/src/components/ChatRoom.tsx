@@ -53,6 +53,19 @@ function stripStreamMood(s: string): string {
   return s.replace(/\n?@@mood:[a-z]+\s*/g, "");
 }
 
+function extractStreamResult(raw: string): { text: string; error: string } {
+  let error = "";
+  const withoutErrors = raw.replace(/\n?@@ai-error:([^\n]*)/g, (_match, encoded: string) => {
+    try {
+      error = decodeURIComponent(encoded);
+    } catch {
+      error = encoded;
+    }
+    return "";
+  });
+  return { text: stripStreamMood(withoutErrors).trim(), error };
+}
+
 const NEGATED_KIND =
   /\b(jangan|janganlah|tak perlu|tidak perlu|tidak usah|tak usah|ga usah|gausah|gak usah|nggak usah|jangan sampai)\s+(bingung|khawatir|pusing|panik|gugup|capek|lelah|sedih|menyerah)\b/i;
 
@@ -217,6 +230,10 @@ export default function ChatRoom({
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef<HTMLTextAreaElement>(null);
   const prevLastMsgIdRef = useRef<number | undefined>(undefined);
+  const activeRequestRef = useRef<AbortController | null>(null);
+  const preservedErrorRef = useRef("");
+  const currentIdRef = useRef(currentId);
+  currentIdRef.current = currentId;
 
   const mascotName = profile?.mascot || "Lode";
 
@@ -267,9 +284,14 @@ export default function ChatRoom({
     prevLastMsgIdRef.current = lastMsgId;
   }, [lastMsgId, live]);
 
+  useEffect(() => () => activeRequestRef.current?.abort(), []);
+
   useEffect(() => {
+    activeRequestRef.current?.abort();
+    activeRequestRef.current = null;
     setLive("");
-    setError("");
+    setError(preservedErrorRef.current);
+    preservedErrorRef.current = "";
     setSending(false);
   }, [currentId]);
 
@@ -348,6 +370,9 @@ export default function ChatRoom({
     const msg = (raw ?? "").trim();
     if (!msg || sending) return;
 
+    const controller = new AbortController();
+    activeRequestRef.current?.abort();
+    activeRequestRef.current = controller;
     setError("");
     setSending(true);
     setLive("");
@@ -362,25 +387,22 @@ export default function ChatRoom({
         created_at: new Date().toISOString(),
       },
     ]);
+    let adoptedConversation = false;
+
+    const adoptConversation = (id: number, title: string, message = "") => {
+      if (cidBefore || adoptedConversation || !id) return;
+      adoptedConversation = true;
+      preservedErrorRef.current = message;
+      onNewConversation(id, title);
+    };
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: msg, conversationId: cidBefore }),
+        signal: controller.signal,
       });
-
-      if (!res.ok) {
-        const j = (await res.json().catch(() => null)) as {
-          error?: string;
-          detail?: string;
-        } | null;
-        setError(
-          `${j?.error ?? "Terjadi kesalahan"}${j?.detail ? ` — ${j.detail}` : ""}`,
-        );
-        return;
-      }
-
       const cid = Number(res.headers.get("x-conversation-id")) || cidBefore || 0;
       const titleRaw = res.headers.get("x-conversation-title");
       const convTitle = titleRaw
@@ -389,8 +411,28 @@ export default function ChatRoom({
           ? `${msg.slice(0, 30)}…`
           : msg;
 
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+          detail?: string;
+        } | null;
+        if (controller.signal.aborted) return;
+        const message = `${j?.error ?? "Terjadi kesalahan"}${j?.detail ? ` — ${j.detail}` : ""}`;
+        if (cid && !cidBefore) {
+          adoptConversation(cid, convTitle, message);
+        } else {
+          setError(message);
+        }
+        return;
+      }
+
       if (!res.body) {
-        setError("Tidak ada respons dari server.");
+        const message = "Tidak ada respons dari server.";
+        if (cid && !cidBefore) {
+          adoptConversation(cid, convTitle, message);
+        } else {
+          setError(message);
+        }
         return;
       }
 
@@ -401,9 +443,9 @@ export default function ChatRoom({
         const { done, value } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
-        setLive(stripStreamMood(acc));
+        if (controller.signal.aborted) return;
+        setLive(stripStreamMood(acc).replace(/\n?@@ai-error:[^\n]*/g, ""));
 
-        // Mood dinamis saat streaming berjalan
         const streamMarker = acc.match(/@@mood:([a-z]+)/);
         if (streamMarker && isMood(streamMarker[1])) {
           setMood(streamMarker[1]);
@@ -414,13 +456,12 @@ export default function ChatRoom({
           }
         }
       }
+      acc += decoder.decode();
+      if (controller.signal.aborted) return;
 
-      let text = acc.trim();
-      const moodMatch = text.match(/@@mood:([a-z]+)/);
+      const result = extractStreamResult(acc);
+      const moodMatch = acc.match(/@@mood:([a-z]+)/);
       const streamMood = moodMatch?.[1];
-      if (moodMatch) {
-        text = text.replace(/@@mood:[a-z]+\s*/g, "").trim();
-      }
       const nextMood: Mood = isMood(streamMood)
         ? streamMood
         : isMood(mood)
@@ -430,39 +471,44 @@ export default function ChatRoom({
         : "netral";
       setMood(nextMood);
 
-      if (text) {
+      if (result.error) setError(result.error);
+      if (result.text && !result.error) {
         addMessages([
           {
             id: -Date.now() + 1,
             conversation_id: cid,
             role: "assistant",
-            content: text,
+            content: result.text,
             created_at: new Date().toISOString(),
             mood: nextMood,
           },
         ]);
       }
 
-      if (!cidBefore) {
-        onNewConversation(cid, convTitle);
-      }
+      adoptConversation(cid, convTitle, result.error);
+      if (result.error || !result.text) return;
 
-      fetch("/api/memory/update", {
+      void fetch("/api/memory/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ conversationId: cid }),
       })
         .then((r) => (r.ok ? r.json() : null))
-        .then(() => onMemoryUpdated(cid))
-        .catch(() => {
-          // update memori gagal — tidak fatal
-        });
+        .then(() => {
+          if (currentIdRef.current === cid) onMemoryUpdated(cid);
+        })
+        .catch(() => undefined);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Koneksi bermasalah");
+      if (!controller.signal.aborted) {
+        setError(err instanceof Error ? err.message : "Koneksi bermasalah");
+      }
     } finally {
-      setSending(false);
-      setLive("");
-      sendingRef.current?.focus();
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+        setSending(false);
+        setLive("");
+        sendingRef.current?.focus();
+      }
     }
   }
 
@@ -501,7 +547,10 @@ export default function ChatRoom({
           {folder ? "Folder" : "+ Folder"}
         </button>
         <button
-          onClick={onNewChat}
+          onClick={() => {
+            setError("");
+            onNewChat();
+          }}
           className="rounded-full border border-white/10 px-3 py-1.5 text-xs font-bold text-mist transition hover:text-night"
         >
           Baru

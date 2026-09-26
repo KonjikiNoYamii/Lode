@@ -36,7 +36,7 @@ export function parseAiThread(json: string): AiThread | null {
   }
 }
 
-function buildHeaders(): Record<string, string> {
+export function aiRequestHeaders(): Record<string, string> {
   const profile = getProfile();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -49,7 +49,12 @@ function buildHeaders(): Record<string, string> {
 
 async function callGemini(
   messages: ChatItem[],
-  opts: { stream?: boolean; thread?: AiThread | null; session?: string } = {},
+  opts: {
+    stream?: boolean;
+    thread?: AiThread | null;
+    session?: string;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Response> {
   const profile = getProfile();
   const body: Record<string, unknown> = { messages };
@@ -58,10 +63,14 @@ async function callGemini(
   if (opts.thread) body.thread = opts.thread;
   if (opts.session) body.session = opts.session;
 
-  const res = await fetch(`${profile.ai_base_url}/chat/completions`, {
+  const endpoint = `${profile.ai_base_url.replace(/\/+$/, "")}/chat/completions`;
+  const res = await fetch(endpoint, {
     method: "POST",
-    headers: buildHeaders(),
+    headers: aiRequestHeaders(),
     body: JSON.stringify(body),
+    signal: opts.signal
+      ? AbortSignal.any([opts.signal, AbortSignal.timeout(180_000)])
+      : AbortSignal.timeout(180_000),
   });
 
   if (!res.ok) {
@@ -89,8 +98,9 @@ export async function streamChat(
   messages: ChatItem[],
   thread?: AiThread | null,
   session?: string,
+  signal?: AbortSignal,
 ): Promise<ReadableStream<Uint8Array>> {
-  const res = await callGemini(messages, { stream: true, thread, session });
+  const res = await callGemini(messages, { stream: true, thread, session, signal });
   if (!res.body) {
     throw new Error("Gemini server tidak mengirim stream");
   }

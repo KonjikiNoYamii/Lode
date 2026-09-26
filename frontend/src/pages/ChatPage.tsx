@@ -5,6 +5,32 @@ import ChatSidebar from "@/components/ChatSidebar";
 import ChatRoom from "@/components/ChatRoom";
 import type { Conversation, Memory, Profile, Topic } from "@/types";
 
+const LAST_CONVERSATION_KEY = "sensei-mentor:last-conversation";
+
+function getLastConversationId(): number | null {
+  try {
+    const value = Number.parseInt(
+      window.localStorage.getItem(LAST_CONVERSATION_KEY) ?? "",
+      10,
+    );
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberConversation(id: number | null): void {
+  try {
+    if (id) {
+      window.localStorage.setItem(LAST_CONVERSATION_KEY, String(id));
+    } else {
+      window.localStorage.removeItem(LAST_CONVERSATION_KEY);
+    }
+  } catch {
+    return;
+  }
+}
+
 export default function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [progressTopics, setProgressTopics] = useState<Topic[]>([]);
@@ -39,10 +65,6 @@ export default function ChatPage() {
     }
   }, []);
 
-  useEffect(() => {
-    refresh(null);
-  }, [refresh]);
-
   const [totalMessages, setTotalMessages] = useState(0);
 
   const addMessages = useCallback((msgs: Message[]) => {
@@ -60,13 +82,23 @@ export default function ChatPage() {
         setMessages(data.messages);
         setTotalMessages(data.total_messages ?? data.messages.length);
         setSideOpen(false);
+        rememberConversation(id);
         await refresh(id);
       } catch {
-        // gagal buka percakapan
+        rememberConversation(null);
       }
     },
     [refresh],
   );
+
+  useEffect(() => {
+    const lastId = getLastConversationId();
+    if (lastId) {
+      void loadConversation(lastId);
+    } else {
+      void refresh(null);
+    }
+  }, [loadConversation, refresh]);
 
   const loadEarlierMessages = useCallback(async () => {
     if (!currentId || messages.length === 0) return;
@@ -88,6 +120,7 @@ export default function ChatPage() {
 
   const newChat = useCallback(() => {
     setCurrentId(null);
+    rememberConversation(null);
     setMessages([]);
     setTotalMessages(0);
     setProgressTopics([]);
@@ -112,6 +145,7 @@ export default function ChatPage() {
   const onNewConversation = useCallback(
     async (id: number) => {
       setCurrentId(id);
+      rememberConversation(id);
       await refresh(id);
     },
     [refresh],
