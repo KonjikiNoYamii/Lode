@@ -69,6 +69,7 @@ Frontend + API dilayani di http://localhost:8787; service AI tetap berjalan loka
 - **Progress otomatis** — setelah tiap percakapan, Lode mencatat topik yang dikuasai / sedang dipelajari / buntu, lalu topik yang sudah dikuasai tidak akan dijelaskan ulang.
 - **Riwayat percakapan** — semua chat tersimpan, bisa dibuka kapan saja. Mentornya tidak "ganti-ganti".
 - **Roadmap-anchored mentoring** — Lode mengikuti roadmap belajar (mis. `ROADMAP.md`) dan tidak melompat ke materi lanjutan sebelum dasar selesai.
+- **Rencana belajar terstruktur** — plan per percakapan tersimpan di database (fase, target, prasyarat, status), jadi urutan belajar tidak hanya mengandalkan file. Lode memakai plan ini sebagai sumber kebenaran dan bisa menandai item selesai sendiri lewat marker `@@plan`; status juga bisa diubah manual dari panel **Rencana Belajar**.
 - **Gaya belajar** — menyesuaikan dengan preferensi (praktek, teori, visual, cerita).
 - **Sesi chat terisolasi** — tiap percakapan memiliki UUID sendiri; konteks dibangun dari histori percakapan tersebut, tanpa session Gemini global. Request chat diproses berurutan agar tidak menimpa context.
 - **Folder workspace (AI agents)** — tiap percakapan bisa diarahkan ke folder lokal tempat kamu menulis jawaban/PR di code editor (mis. Zed). Lode membaca struktur dan isi file; penulisan file hanya aktif jika diizinkan lewat Settings.

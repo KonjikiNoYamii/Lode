@@ -54,6 +54,20 @@ export interface Topic {
   updated_at: string;
 }
 
+export type PlanStatus = "todo" | "learning" | "done" | "stuck";
+
+export interface PlanItem {
+  id: number;
+  conversation_id: number;
+  phase: number;
+  title: string;
+  objective: string;
+  prerequisites: string;
+  status: PlanStatus;
+  order_index: number;
+  updated_at: string;
+}
+
 export interface Memory {
   id: number;
   type: string;
@@ -62,7 +76,7 @@ export interface Memory {
   created_at: string;
 }
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = path.resolve(process.env.DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, "mentor.db"));
@@ -129,6 +143,19 @@ CREATE TABLE IF NOT EXISTS workspace_files (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_wf_conv_rel ON workspace_files(conversation_id, rel);
+
+CREATE TABLE IF NOT EXISTS plan_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL DEFAULT 0,
+  phase INTEGER NOT NULL DEFAULT 1,
+  title TEXT NOT NULL,
+  objective TEXT NOT NULL DEFAULT '',
+  prerequisites TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'todo',
+  order_index INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_plan_conv ON plan_items(conversation_id, phase, order_index);
 `);
 
 db.prepare("INSERT OR IGNORE INTO profile (id) VALUES (1)").run();
@@ -336,6 +363,7 @@ export function deleteConversation(id: number): void {
   db.prepare("DELETE FROM topics WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM memories WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM workspace_files WHERE conversation_id = ?").run(id);
+  db.prepare("DELETE FROM plan_items WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
   walCheckpoint();
 }
@@ -344,6 +372,7 @@ export interface MaintenanceResult {
   freedMessages: number;
   freedTopics: number;
   freedMemories: number;
+  freedPlan: number;
   sizeBefore: number;
   sizeAfter: number;
   walBefore: number;
@@ -405,12 +434,20 @@ export function runMaintenance(): MaintenanceResult {
     "DELETE FROM workspace_files WHERE conversation_id NOT IN (SELECT id FROM conversations)",
   ).run();
 
+  const freedPlan = Number(
+    db
+      .prepare(
+        "DELETE FROM plan_items WHERE conversation_id NOT IN (SELECT id FROM conversations)",
+      )
+      .run().changes,
+  );
+
   db.prepare("PRAGMA optimize").all();
   walCheckpoint();
 
   const sizeAfter = readBytes(mainPath) + readBytes(walPath) + readBytes(shmPath);
   const walAfter = readBytes(walPath);
-  return { freedMessages, freedTopics, freedMemories, sizeBefore, sizeAfter, walBefore, walAfter };
+  return { freedMessages, freedTopics, freedMemories, freedPlan, sizeBefore, sizeAfter, walBefore, walAfter };
 }
 
 function touchConversation(id: number): void {
@@ -604,4 +641,134 @@ export function listWorkspaceFiles(conversationId: number): WorkspaceFileRecord[
       "SELECT * FROM workspace_files WHERE conversation_id = ? ORDER BY updated_at DESC, rel ASC",
     )
     .all(conversationId) as unknown as WorkspaceFileRecord[];
+}
+
+const PLAN_STATUSES = new Set(["todo", "learning", "done", "stuck"]);
+
+export function listPlanItems(conversationId: number): PlanItem[] {
+  return db
+    .prepare(
+      `SELECT * FROM plan_items
+       WHERE conversation_id = ?
+       ORDER BY phase ASC, order_index ASC, id ASC`,
+    )
+    .all(conversationId) as unknown as PlanItem[];
+}
+
+function nextOrderIndex(conversationId: number, phase: number): number {
+  const row = db
+    .prepare(
+      "SELECT COALESCE(MAX(order_index), -1) AS m FROM plan_items WHERE conversation_id = ? AND phase = ?",
+    )
+    .get(conversationId, phase) as { m: number };
+  return Number(row.m) + 1;
+}
+
+export function createPlanItem(
+  conversationId: number,
+  input: { title: string; objective?: string; prerequisites?: string; phase?: number },
+): number {
+  const cleanTitle = input.title.trim().slice(0, 200);
+  if (!cleanTitle) return 0;
+  const phase = Number.isFinite(input.phase) && Number(input.phase) > 0
+    ? Math.min(Math.trunc(Number(input.phase)), 99)
+    : 1;
+  const result = db
+    .prepare(
+      `INSERT INTO plan_items (conversation_id, phase, title, objective, prerequisites, order_index)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      conversationId,
+      phase,
+      cleanTitle,
+      (input.objective ?? "").trim().slice(0, 500),
+      (input.prerequisites ?? "").trim().slice(0, 300),
+      nextOrderIndex(conversationId, phase),
+    );
+  return Number(result.lastInsertRowid);
+}
+
+export function patchPlanItem(
+  id: number,
+  patch: {
+    title?: string;
+    objective?: string;
+    prerequisites?: string;
+    phase?: number;
+    status?: string;
+  },
+): void {
+  const sets: string[] = [];
+  const values: (string | number)[] = [];
+  if (patch.title !== undefined) {
+    const title = patch.title.trim().slice(0, 200);
+    if (!title) return;
+    sets.push("title = ?");
+    values.push(title);
+  }
+  if (patch.objective !== undefined) {
+    sets.push("objective = ?");
+    values.push(patch.objective.trim().slice(0, 500));
+  }
+  if (patch.prerequisites !== undefined) {
+    sets.push("prerequisites = ?");
+    values.push(patch.prerequisites.trim().slice(0, 300));
+  }
+  if (patch.phase !== undefined) {
+    const phase = Number(patch.phase);
+    if (Number.isFinite(phase) && phase > 0) {
+      sets.push("phase = ?");
+      values.push(Math.min(Math.trunc(phase), 99));
+    }
+  }
+  if (patch.status !== undefined) {
+    sets.push("status = ?");
+    values.push(PLAN_STATUSES.has(patch.status) ? patch.status : "todo");
+  }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(
+    `UPDATE plan_items SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`,
+  ).run(...values);
+}
+
+export function deletePlanItem(id: number): void {
+  db.prepare("DELETE FROM plan_items WHERE id = ?").run(id);
+}
+
+export function movePlanItem(
+  conversationId: number,
+  id: number,
+  dir: "up" | "down",
+): void {
+  const item = db
+    .prepare(
+      "SELECT id, phase, order_index FROM plan_items WHERE id = ? AND conversation_id = ?",
+    )
+    .get(id, conversationId) as
+    | { id: number; phase: number; order_index: number }
+    | undefined;
+  if (!item) return;
+  const cmp = dir === "up" ? "<" : ">";
+  const order = dir === "up" ? "DESC" : "ASC";
+  const sibling = db
+    .prepare(
+      `SELECT id, order_index FROM plan_items
+       WHERE conversation_id = ? AND phase = ? AND order_index ${cmp} ?
+       ORDER BY order_index ${order}
+       LIMIT 1`,
+    )
+    .get(conversationId, item.phase, item.order_index) as
+    | { id: number; order_index: number }
+    | undefined;
+  if (!sibling) return;
+  const a = item.order_index;
+  const b = sibling.order_index;
+  db.prepare(
+    "UPDATE plan_items SET order_index = ? WHERE id = ?",
+  ).run(b, item.id);
+  db.prepare(
+    "UPDATE plan_items SET order_index = ? WHERE id = ?",
+  ).run(a, sibling.id);
 }

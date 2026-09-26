@@ -6,9 +6,19 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import type { Memory, Message, Mood, Profile, Topic, TopicStatus } from "@/types";
+import type {
+  Memory,
+  Message,
+  Mood,
+  PlanItem,
+  PlanStatus,
+  Profile,
+  Topic,
+  TopicStatus,
+} from "@/types";
 import { GraduationCap, BookOpen } from "lucide-react";
 import { Markdown } from "./Markdown";
+import PlanPanel from "./PlanPanel";
 import MentorAvatar, {
   MOODS,
   MOOD_THEME,
@@ -17,6 +27,7 @@ import MentorAvatar, {
 import { STATUS_META } from "./status";
 
 const STATUS_ORDER: TopicStatus[] = ["mastered", "learning", "stuck", "todo"];
+const PLAN_STATUSES: PlanStatus[] = ["todo", "learning", "done", "stuck"];
 
 function FilterChip({
   active,
@@ -50,7 +61,7 @@ function isMood(v: string | undefined): v is Mood {
 }
 
 function stripStreamMood(s: string): string {
-  return s.replace(/\n?@@mood:[a-z]+\s*/g, "");
+  return s.replace(/\n?@@mood:[a-z]+\s*/g, "").replace(/\n?@@plan:\d+:[a-z]+\s*/g, "");
 }
 
 function extractStreamResult(raw: string): { text: string; error: string } {
@@ -108,11 +119,13 @@ interface Props {
   messages: Message[];
   topics?: Topic[];
   memories?: Memory[];
+  plan?: PlanItem[];
   totalMessages?: number;
   onLoadEarlier?: () => Promise<void>;
   addMessages: (msgs: Message[]) => void;
   onNewConversation: (id: number, title: string) => void;
   onMemoryUpdated: (id: number) => void;
+  onPlanUpdated: (plan: PlanItem[]) => void;
   onNewChat: () => void;
   onOpenSidebar: () => void;
   onSetFolder: (folder: string) => Promise<void>;
@@ -204,11 +217,13 @@ export default function ChatRoom({
   messages,
   topics = [],
   memories = [],
+  plan = [],
   totalMessages = 0,
   onLoadEarlier,
   addMessages,
   onNewConversation,
   onMemoryUpdated,
+  onPlanUpdated,
   onNewChat,
   onOpenSidebar,
   onSetFolder,
@@ -470,6 +485,15 @@ export default function ChatRoom({
         ? (lastMood(messages) as Mood)
         : "netral";
       setMood(nextMood);
+
+      for (const marker of acc.matchAll(/@@plan:(\d+):([a-z]+)/g)) {
+        const pid = Number(marker[1]);
+        const status = marker[2] as PlanStatus;
+        if (!Number.isSafeInteger(pid) || !PLAN_STATUSES.includes(status)) continue;
+        onPlanUpdated(
+          plan.map((item) => (item.id === pid ? { ...item, status } : item)),
+        );
+      }
 
       if (result.error) setError(result.error);
       if (result.text && !result.error) {
@@ -754,6 +778,12 @@ export default function ChatRoom({
 
         {/* Bagian Bawah: Progress Belajar & Catatan Mentor (INDEPENDENTLY SCROLLABLE) */}
         <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-5">
+          <PlanPanel
+            conversationId={currentId}
+            plan={plan}
+            onPlanUpdated={onPlanUpdated}
+          />
+
 {/* Section: Progress Belajar */}
           <section>
             <div className="mb-2.5 flex items-center justify-between px-1">

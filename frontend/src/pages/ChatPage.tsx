@@ -3,7 +3,13 @@ import { loadState, send, get } from "@/api";
 import { useCallback, useEffect, useState } from "react";
 import ChatSidebar from "@/components/ChatSidebar";
 import ChatRoom from "@/components/ChatRoom";
-import type { Conversation, Memory, Profile, Topic } from "@/types";
+import type {
+  Conversation,
+  Memory,
+  PlanItem,
+  Profile,
+  Topic,
+} from "@/types";
 
 const LAST_CONVERSATION_KEY = "sensei-mentor:last-conversation";
 
@@ -35,6 +41,7 @@ export default function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [progressTopics, setProgressTopics] = useState<Topic[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [plan, setPlan] = useState<PlanItem[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -50,18 +57,23 @@ export default function ChatPage() {
     }
     if (id) {
       try {
-        const r = await get<{ topics: Topic[]; memories: Memory[] }>(
-          `/api/conversations/${id}/progress`,
-        );
+        const r = await get<{
+          topics: Topic[];
+          memories: Memory[];
+          plan?: PlanItem[];
+        }>(`/api/conversations/${id}/progress`);
         setProgressTopics(r.topics);
         setMemories(r.memories);
+        setPlan(r.plan ?? []);
       } catch {
         setProgressTopics([]);
         setMemories([]);
+        setPlan([]);
       }
     } else {
       setProgressTopics([]);
       setMemories([]);
+      setPlan([]);
     }
   }, []);
 
@@ -124,6 +136,7 @@ export default function ChatPage() {
     setMessages([]);
     setTotalMessages(0);
     setProgressTopics([]);
+    setPlan([]);
     setSideOpen(false);
   }, []);
 
@@ -196,11 +209,13 @@ export default function ChatPage() {
         messages={messages}
         topics={progressTopics}
         memories={memories}
+        plan={plan}
         totalMessages={totalMessages}
         onLoadEarlier={loadEarlierMessages}
         addMessages={addMessages}
         onNewConversation={onNewConversation}
         onMemoryUpdated={(id) => refresh(id)}
+        onPlanUpdated={setPlan}
         onNewChat={newChat}
         onOpenSidebar={() => setSideOpen(true)}
         onSetFolder={setFolder}

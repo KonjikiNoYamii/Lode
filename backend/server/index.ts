@@ -8,8 +8,10 @@ import {
   addMessage,
   countMessages,
   createConversation,
+  createPlanItem,
   deleteConversation,
   deleteMemory,
+  deletePlanItem,
   deleteTopic,
   getConversation,
   getProfile,
@@ -17,10 +19,13 @@ import {
   listMemories,
   listMemoriesByConversation,
   listMessages,
+  listPlanItems,
   listTopics,
   listTopicsByConversation,
   listWorkspaceFiles,
+  movePlanItem,
   patchConversation,
+  patchPlanItem,
   patchTopic,
   runMaintenance,
   updateProfile,
@@ -35,6 +40,8 @@ import {
   type ChatItem,
 } from "../lib/ai";
 import { finalMood } from "../lib/mood";
+import { buildPlanContext, stripPlanMarkers } from "../lib/plan";
+import type { PlanStatus } from "../lib/db";
 import {
   buildMemoryUpdatePrompt,
   buildSystemPrompt,
@@ -254,10 +261,11 @@ function extractMarkers(text: string): string[] {
   return out;
 }
 
-function stripMarkers(text: string): string {
-  return text
+function stripMarkers(text: string, planSink?: Map<number, PlanStatus>): string {
+  const base = text
     .replace(/@@read\("[^"]*"\)/g, "")
     .replace(/@@mood\("[^"]*"\)/g, "");
+  return stripPlanMarkers(base, planSink);
 }
 
 async function forgetGeminiSession(sessionId: string): Promise<boolean> {
@@ -410,6 +418,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
     }
 
+    const planItems = listPlanItems(cid);
+    const planIds = new Set(planItems.map((i) => i.id));
+
     const system = buildSystemPrompt(
       profile,
       topics,
@@ -417,7 +428,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       workspaceCtx || "",
       allowWrite,
       authoredCtx,
+      buildPlanContext(planItems),
     );
+
+    const planSink = new Map<number, PlanStatus>();
 
     const round1Payload = (): ChatItem[] => {
       const items: ChatItem[] = [{ role: "system", content: system }];
@@ -506,7 +520,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           const re = /@@read\("([^"]+)"\)/g;
           while ((m = re.exec(txt))) markers.add(m[1]);
         };
-        const stripMarkersAndTokens = (txt: string) => stripMarkers(txt);
+        const stripMarkersAndTokens = (txt: string) => stripMarkers(txt, planSink);
         const run = async () => {
           try {
             const flt = makeWriteFilter();
@@ -606,10 +620,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     if (round1.mode === "collect" && round1.markers.size === 0 && round1.full.trim()) {
       // jawaban pendek tanpa marker — belum sempat di-stream
-      if (!res.writableEnded) res.write(stripMarkers(parsed.clean));
+      if (!res.writableEnded) res.write(stripMarkers(parsed.clean, planSink));
     }
 
-    let finalText = stripMarkers(parsed.clean).trim();
+    let finalText = stripMarkers(parsed.clean, planSink).trim();
 
     if (round1.markers.size > 0) {
       const rels = [...round1.markers];
@@ -630,7 +644,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d)));
+          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink)));
         });
         if (r2.thread) r1thread = r2.thread;
         if (!res.writableEnded) res.write(r2f.end());
@@ -645,9 +659,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             (fail.length
               ? `\n[GAGAL: ${fail.map((r) => `${r.rel} (${r.error})`).join("; ")}]`
               : "");
-          finalText = `${stripMarkers(r2Parsed.clean)}${note}`.trim() || finalText;
+          finalText = `${stripMarkers(r2Parsed.clean, planSink)}${note}`.trim() || finalText;
         } else {
-          finalText = stripMarkers(r2Parsed.clean).trim() || finalText;
+          finalText = stripMarkers(r2Parsed.clean, planSink).trim() || finalText;
         }
         if (r2.streamError) providerError = r2.streamError;
       } catch (err) {
@@ -688,7 +702,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d)));
+          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink)));
         });
         if (r2.thread) r1thread = r2.thread;
         if (!res.writableEnded) res.write(r2f.end());
@@ -725,12 +739,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return;
     }
 
+    const planUpdates = [...planSink.entries()].filter(([pid]) => planIds.has(pid));
     if (finalText && !res.writableEnded) {
       const { mood, clean: moodClean } = finalMood(finalText);
       finalText = moodClean.trim();
       if (finalText) {
         addMessage(cid, "assistant", finalText, mood);
         res.write(`\n@@mood:${mood}\n`);
+        for (const [pid, status] of planUpdates) {
+          patchPlanItem(pid, { status });
+          res.write(`@@plan:${pid}:${status}\n`);
+        }
+      }
+    } else {
+      for (const [pid, status] of planUpdates) {
+        patchPlanItem(pid, { status });
       }
     }
 
@@ -886,6 +909,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       conversation_id: cid,
       topics: listTopicsByConversation(cid),
       memories: listMemoriesByConversation(cid),
+      plan: listPlanItems(cid),
     });
   }
   const convMatch = p.match(/^\/api\/conversations\/(\d+)$/);
@@ -954,6 +978,61 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     if (method === "DELETE") {
       deleteTopic(id);
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  // ---------- plan belajar ----------
+  if (p === "/api/plan") {
+    if (method === "GET") {
+      const cid = Number(url.searchParams.get("conversationId")) || 0;
+      return sendJson(res, 200, { plan: listPlanItems(cid) });
+    }
+    if (method === "POST") {
+      const b = await readJson(req);
+      const cid = Number(b.conversationId) || 0;
+      if (!getConversation(cid)) {
+        return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+      }
+      const id = createPlanItem(cid, {
+        title: String(b.title ?? ""),
+        objective: String(b.objective ?? ""),
+        prerequisites: String(b.prerequisites ?? ""),
+        phase: Number(b.phase) || 1,
+      });
+      if (!id) {
+        return sendJson(res, 400, { error: "Judul item plan wajib diisi" });
+      }
+      return sendJson(res, 200, { plan: listPlanItems(cid) });
+    }
+  }
+  if (method === "POST" && p === "/api/plan/move") {
+    const b = await readJson(req);
+    const cid = Number(b.conversationId) || 0;
+    const id = Number(b.id) || 0;
+    const dir = b.dir === "up" ? "up" : "down";
+    if (!cid || !id) {
+      return sendJson(res, 400, { error: "conversationId dan id wajib diisi" });
+    }
+    movePlanItem(cid, id, dir);
+    return sendJson(res, 200, { plan: listPlanItems(cid) });
+  }
+  const planMatch = p.match(/^\/api\/plan\/(\d+)$/);
+  if (planMatch) {
+    const id = Number(planMatch[1]);
+    if (method === "PATCH") {
+      const b = await readJson(req);
+      patchPlanItem(id, {
+        title: b.title as string | undefined,
+        objective: b.objective as string | undefined,
+        prerequisites: b.prerequisites as string | undefined,
+        phase: b.phase as number | undefined,
+        status: b.status as string | undefined,
+      });
+      return sendJson(res, 200, { ok: true });
+    }
+    if (method === "DELETE") {
+      deletePlanItem(id);
       return sendJson(res, 200, { ok: true });
     }
   }

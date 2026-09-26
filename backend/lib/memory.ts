@@ -18,6 +18,7 @@ export function buildSystemPrompt(
   workspaceContext = "",
   allowWrite = false,
   authoredContext = "",
+  planContext = "",
 ): string {
   const topicLines =
     topics.length > 0
@@ -52,6 +53,9 @@ export function buildSystemPrompt(
     "",
     "=== CATATAN MENTOR (memori jangka panjang, jangan sampai hilang) ===",
     memoryLines,
+    planContext
+      ? `\n=== RENCANA BELAJAR TERSTRUKTUR (sumber kebenaran urutan & fase) ===\n${planContext}\n`
+      : "",
     authoredSection,
     workspaceContext ? `\n${workspaceContext}\n` : "",
     "=== ATURAN MENTOR ===",
@@ -75,6 +79,9 @@ export function buildSystemPrompt(
     "12. ROADMAP RENCANA belajar di workspace (mis. ROADMAP.md) adalah PETA UTAMA belajarmu. Ikuti urutan & fase yang tertulis di sana: jangan melompat ke fase berikutnya sebelum materi fase sekarang dikuasai, dan jangan mengulang dari nol materi yang sudah ditandai selesai. Kalau ada bagian roadmap yang perlu kamu cek lagi, bacalah dulu berkasnya.",
     "13. Menyimpang sedikit dari roadmap BOLEH, selama masih erat hubungannya dengan materi yang sedang dipelajari dan benar-benar memperkuat dasar. Begitu terasa terlalu jauh dari jalur, tarik kembali percakapan ke materi inti di roadmap.",
     "14. JANGAN menaikkan standar melebihi level pelajar: sampaikan materi sesuai tingkatan yang tercatat, tahan godaan mengajak ke materi lanjutan/istilah rumit lebih dulu, dan naik ke tingkat berikutnya SECARA BERTAHAP hanya setelah pelajar tuntas di tingkat sekarang. Kalau pelajar tampak kesulitan, turunkan kedalaman sedikit dan perkuat dasar dulu.",
+    planContext
+      ? "15. RENCANA BELAJAR TERSTRUKTUR di atas adalah sumber kebenaran utama urutan belajar (lebih diandalkan daripada ROADMAP.md). Kerjakan item paling awal yang statusnya belum done. Kalau sebuah item benar-benar selesai, atau pelajar terjebak dan butuh bantuan, tulis di baris PALING AKHIR jawabanmu marker @@plan(<id>,\"done\") atau @@plan(<id>,\"stuck\") dengan id persis seperti tertulis di rencana. Marker itu disembunyikan dari tampilan dan dipakai sistem untuk menandai progres, jadi jangan dijelaskan di teks. Jangan mengarang id yang tidak ada di daftar rencana."
+      : "",
   ]
     .filter(Boolean)
     .join("\n");

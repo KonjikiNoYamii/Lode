@@ -57,6 +57,20 @@ export interface Topic {
   updated_at: string;
 }
 
+export type PlanStatus = "todo" | "learning" | "done" | "stuck";
+
+export interface PlanItem {
+  id: number;
+  conversation_id: number;
+  phase: number;
+  title: string;
+  objective: string;
+  prerequisites: string;
+  status: PlanStatus;
+  order_index: number;
+  updated_at: string;
+}
+
 export interface Memory {
   id: number;
   type: string;
