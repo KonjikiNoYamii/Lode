@@ -15,6 +15,14 @@ dist/
 .env.*
 !.env.example
 
+venv/
+__pycache__/
+.cache/
+*.py[cod]
+
+# helper AI lokal berbasis cookie akun (sensitif, sengaja tidak di-commit)
+gemini-server/
+
 # log & misc
 *.log
 .DS_Store

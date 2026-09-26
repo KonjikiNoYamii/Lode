@@ -325,7 +325,8 @@ export default function SettingsForm() {
       <div className="border-t border-white/10 pt-6">
         <h2 className="text-xl font-extrabold">Server AI</h2>
         <p className="mt-1 text-sm text-mist">
-          Endpoint OpenAI-compatible. Default-nya gemini-api-server di port 8002.
+          Endpoint OpenAI-compatible. Default memakai gemini-server lokal project ini di
+          port 8003, dengan autentikasi cookie akun Gemini — tanpa Google API key.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="AI server URL">
@@ -333,24 +334,30 @@ export default function SettingsForm() {
               className={inputCls}
               value={profile.ai_base_url}
               onChange={(e) => patch("ai_base_url", e.target.value)}
-              placeholder="http://localhost:8002/v1"
+              placeholder="http://127.0.0.1:8003/v1"
             />
           </Field>
-          <Field label="API key (opsional)">
+          <Field
+            label="API secret server (opsional)"
+            hint="Kosongkan untuk server lokal. Cookie Gemini diatur di gemini-server/.env."
+          >
             <input
               type="password"
               className={inputCls}
               value={profile.ai_api_key}
               onChange={(e) => patch("ai_api_key", e.target.value)}
-              placeholder="Kosongkan kalau server lokal"
+              placeholder="Kosongkan untuk server lokal"
             />
           </Field>
-          <Field label="Model (opsional)">
+          <Field
+            label="Model Gemini (opsional)"
+            hint="Kosongkan agar server memilih model flash yang tersedia di akunmu."
+          >
             <input
               className={inputCls}
               value={profile.ai_model}
               onChange={(e) => patch("ai_model", e.target.value)}
-              placeholder="Kosong = pakai default server"
+              placeholder="Pilih otomatis"
             />
           </Field>
         </div>
@@ -406,7 +413,9 @@ export default function SettingsForm() {
       </div>
 
       <p className="text-[11px] text-mist">
-        API key & data profil hanya disimpan di database lokal (backend/data/mentor.db), tidak dikirim ke mana pun selain server AI yang kamu tentukan.
+        API secret opsional & data profil hanya disimpan di database lokal
+        (backend/data/mentor.db), tidak dikirim ke mana pun selain server AI yang kamu
+        tentukan.
       </p>
     </div>
   );

@@ -6,7 +6,7 @@
     "setup": "npm install && npm --prefix backend install && npm --prefix frontend install",
     "dev": "concurrently -k -n api,web -c blue,magenta \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
     "ai": "npm --prefix backend run ai",
-    "dev:full": "concurrently -k -n ai,api,web -c yellow,blue,magenta \"npm run ai\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "dev:full": "concurrently -n ai,api,web -c yellow,blue,magenta \"npm run ai\" \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
     "build": "npm --prefix frontend run build",
     "start": "npm --prefix backend run start",
     "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck"

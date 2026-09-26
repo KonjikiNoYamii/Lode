@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS profile (
   learning_style TEXT NOT NULL DEFAULT 'praktek',
   mascot TEXT NOT NULL DEFAULT 'Lode',
   workspace TEXT NOT NULL DEFAULT '',
-  ai_base_url TEXT NOT NULL DEFAULT 'http://localhost:8002/v1',
+  ai_base_url TEXT NOT NULL DEFAULT 'http://127.0.0.1:8003/v1',
   ai_api_key TEXT NOT NULL DEFAULT '',
   ai_model TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -213,18 +213,35 @@ ensureColumn("profile", "ws_auto_kb", "ws_auto_kb INTEGER NOT NULL DEFAULT 0");
 ensureColumn(
   "profile",
   "ws_allow_write",
-  "ws_allow_write INTEGER NOT NULL DEFAULT 1",
+  "ws_allow_write INTEGER NOT NULL DEFAULT 0",
 );
 
 db.prepare("UPDATE profile SET ws_max_depth = 7 WHERE id = 1 AND ws_max_depth = 3").run();
 db.prepare("UPDATE profile SET ws_max_files = 350 WHERE id = 1 AND ws_max_files = 150").run();
 
-const ENV_BASE_URL = process.env.GEMINI_SERVER_BASE_URL;
+const LEGACY_AI_BASE_URL = "http://localhost:8002/v1";
+const OVERRIDE_AI_BASE_URL = process.env.GEMINI_SERVER_BASE_URL?.trim();
+const DEFAULT_AI_BASE_URL = OVERRIDE_AI_BASE_URL || "http://127.0.0.1:8003/v1";
+const LEGACY_AI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash"];
+const DEFAULT_AI_MODEL = process.env.GEMINI_MODEL?.trim() || "";
+
+db.prepare(
+  "UPDATE profile SET ai_base_url = ?, ai_api_key = '' WHERE id = 1 AND ai_base_url = ?",
+).run(DEFAULT_AI_BASE_URL, LEGACY_AI_BASE_URL);
+db.prepare(
+  "UPDATE profile SET ai_model = ? WHERE id = 1 AND TRIM(ai_model) = ''",
+).run(DEFAULT_AI_MODEL);
+for (const legacyModel of LEGACY_AI_MODELS) {
+  db.prepare("UPDATE profile SET ai_model = ? WHERE id = 1 AND ai_model = ?").run(
+    DEFAULT_AI_MODEL,
+    legacyModel,
+  );
+}
 
 function rowToProfile(row: unknown): Profile {
   const r = row as Profile;
-  if (ENV_BASE_URL && r.ai_base_url === "http://localhost:8002/v1") {
-    return { ...r, ai_base_url: ENV_BASE_URL };
+  if (OVERRIDE_AI_BASE_URL && r.ai_base_url === "http://127.0.0.1:8003/v1") {
+    return { ...r, ai_base_url: DEFAULT_AI_BASE_URL };
   }
   return r;
 }

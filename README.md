@@ -11,42 +11,25 @@ sensei-mentor/
 │   └── lib/              # db (SQLite node:sqlite), ai client, template memori mentor
 ├── frontend/             # UI (Vite + React + TypeScript + Tailwind)
 │   └── src/              # App, Chat, Sidebar, Settings, komponen tema anime
-├── gemini-api-server/    # Gemini API server (Google AI Studio key)
-└── openrouter-server/    # OpenRouter server (OpenRouter API key)
+└── gemini-server/         # Copy lokal gemini-server berbasis cookie akun Gemini
 ```
 
 ## Cara pakai
 
-### 1. Siapkan AI server
+### 1. Siapkan cookie akun Gemini
 
-Lode mendukung beberapa backend AI. Pilih salah satu (atau jalankan beberapa sekaligus):
+Project ini memakai copy `gemini-server` di dalam repo. Folder ini **sensitif dan sengaja tidak di-commit** (sudah masuk `.gitignore`), jadi jangan dihapus dan jangan di-push. Autentikasinya memakai cookie sesi Google/Gemini, **bukan** Google API key, dan tidak memakai server Gemini project lain.
 
-| Server | Port | Sumber AI | Keterangan |
-|--------|------|-----------|------------|
-| `gemini-api-server` | 8002 | Google AI Studio API key | Gratis, stabil, model `gemini-3.5-flash-lite` |
-| `openrouter-server` | 8010 | OpenRouter API key | Banyak model, beberapa gratis |
-
-**Rekomendasi**: `gemini-api-server` — gratis, stabil, pakai API resmi Google.
-
-#### gemini-api-server (recommended)
+1. Buka https://gemini.google.com dan login ke akun yang mau dipakai.
+2. Buka DevTools (`F12`) → **Application/Storage** → **Cookies** → `https://gemini.google.com`.
+3. Salin nilai `__Secure-1PSID` dan `__Secure-1PSIDTS`.
+4. Siapkan file konfigurasi:
 
 ```bash
-cd gemini-api-server
-python3 -m venv venv
-./venv/bin/pip install fastapi uvicorn httpx pydantic python-dotenv
-# Edit .env → isi GEMINI_API_KEY dari https://aistudio.google.com/apikey
-systemctl --user start gemini-api-server  # atau: python3 server.py
+cp gemini-server/.env.example gemini-server/.env
 ```
 
-#### openrouter-server
-
-```bash
-cd openrouter-server
-python3 -m venv venv
-./venv/bin/pip install fastapi uvicorn httpx pydantic python-dotenv
-# Edit .env → isi OPENROUTER_API_KEY dari https://openrouter.ai/keys
-systemctl --user start openrouter-server
-```
+Isi `gemini-server/.env` dengan `SECURE_1PSID=<cookie>` dan `SECURE_1PSIDTS=<cookie>`. Jangan pernah commit file ini. `npm run ai` akan membuat virtualenv, memasang dependency dari `gemini-server/requirements.txt`, lalu menjalankan service lokal.
 
 ### 2. Install
 
@@ -62,29 +45,33 @@ npm run dev:full
 
 - Frontend: http://localhost:5173
 - API: http://localhost:8787 (auto-diproxy oleh Vite ke `/api`)
-- AI server: http://localhost:8002 (atau :8010 tergantung yang dipakai)
+- gemini-server lokal: http://127.0.0.1:8003 (cookie auth)
 
 > Nama kamu otomatis diambil dari username Linux — tidak perlu mengetik lagi.
 
-### 4. Production (build + satu port)
+### 4. Production (build + app satu port)
+
+Jalankan `npm run ai` di terminal terpisah, lalu:
 
 ```bash
 npm run build
-npm run start     # melayani frontend + API di http://localhost:8787
+npm run start
 ```
+
+Frontend + API dilayani di http://localhost:8787; service AI tetap berjalan lokal di port 8003.
 
 ## Fitur
 
 - **Chat streaming** dengan AI, tampilan markdown rapi.
 - **Syntax highlighting** otomatis untuk kode (highlight.js) dan **KaTeX** untuk matematika.
 - **Render `<Sequence>/<Step>`** dari output Gemini jadi daftar terstruktur.
-- **Memori jangka panjang**: profil kamu, progress belajar, dan catatan mentor tersimpan di SQLite (`backend/data/mentor.db`).
+- **Memori persisten**: profil, histori, progress, dan catatan mentor tersimpan di SQLite (`backend/data/mentor.db`) dan tetap bisa dibuka kembali.
 - **Progress otomatis** — setelah tiap percakapan, Lode mencatat topik yang dikuasai / sedang dipelajari / buntu, lalu topik yang sudah dikuasai tidak akan dijelaskan ulang.
 - **Riwayat percakapan** — semua chat tersimpan, bisa dibuka kapan saja. Mentornya tidak "ganti-ganti".
 - **Roadmap-anchored mentoring** — Lode mengikuti roadmap belajar (mis. `ROADMAP.md`) dan tidak melompat ke materi lanjutan sebelum dasar selesai.
 - **Gaya belajar** — menyesuaikan dengan preferensi (praktek, teori, visual, cerita).
-- **Thread/session isolation** — tiap percakapan terisolasi, konteks tidak bercampur.
-- **Folder workspace (AI agents)** — tiap percakapan bisa diarahkan ke folder lokal tempat kamu menulis jawaban/PR di code editor (mis. Zed). Lode *membaca* folder itu (struktur + isi file) untuk mengoreksi — read-only, kamu yang menulis di editor.
+- **Sesi chat terisolasi** — tiap percakapan memiliki UUID sendiri; konteks dibangun dari histori percakapan tersebut, tanpa session Gemini global. Request chat diproses berurutan agar tidak menimpa context.
+- **Folder workspace (AI agents)** — tiap percakapan bisa diarahkan ke folder lokal tempat kamu menulis jawaban/PR di code editor (mis. Zed). Lode membaca struktur dan isi file; penulisan file hanya aktif jika diizinkan lewat Settings.
 - **Breathing-room UI** — reveal bertahap pesan, heading gradien animasi, blok kode "bernapas" (glow lembut), shimmer loading.
 - **Tema anime** yang menyenangkan ✨
 
@@ -94,13 +81,13 @@ Semua setting disimpan di database (edit lewat UI **Pengaturan**):
 
 | Field              | Default                | Keterangan                        |
 | ------------------ | ---------------------- | --------------------------------- |
-| AI server URL      | `http://localhost:8002/v1` | Endpoint OpenAI-compatible      |
-| API key            | (kosong)               | Kosongkan kalau server lokal      |
-| Model              | (kosong)               | Kosong = pakai default server AI  |
+| AI server URL      | `http://127.0.0.1:8003/v1` | gemini-server lokal project ini |
+| API secret server  | (kosong)               | Opsional; hanya untuk host non-loopback |
+| Model              | (kosong)               | Server memilih model flash yang tersedia di akun |
 | Folder workspace default | (kosong)            | Dipakai tiap percakapan baru (bisа diubah per-percakapan lewat tombol **Folder** di chat) |
 | Bahasa / Level / Tujuan / Gaya belajar | —      | Dipakai AI untuk menyesuaikan pengajaran |
 
-> Catatan: DB berisi data pribadi & API key. File `backend/data/` di-gitignore, jangan pernah di-commit.
+> Catatan: DB berisi data pribadi & API secret opsional. File `backend/data/` dan `gemini-server/.env` di-gitignore, jangan pernah di-commit.
 
 ## Cara kerja folder workspace (agent)
 
@@ -109,7 +96,7 @@ Semua setting disimpan di database (edit lewat UI **Pengaturan**):
 3. Klik **Pindai folder** untuk memastikan path valid, lalu **Simpan folder**.
 4. Ketik seperti biasa, misal *"Cek file latihan.py aku, ada error"* — Lode otomatis membaca struktur folder, dan kalau perlu detail file akan membaca isinya lalu menjawab.
 
-Fitur ini **read-only**: Lode tidak pernah menulis/mengubah file — kamu tetap menulis di editor (Zed/VSCode/apa pun), Lode hanya membaca dan mengoreksi.
+Secara default Lode hanya membaca. Jika switch **"Lode boleh membuat file/folder"** diaktifkan, blok `@@write` dari model dapat membuat file/folder di dalam workspace yang dipilih; file di luar workspace tetap ditolak.
 
 Pengamanan: folder `node_modules`, `.git`, `dist`, file biner & file besar (>400KB) otomatis dilewati.
 
@@ -119,25 +106,17 @@ Pengamanan: folder `node_modules`, `.git`, `dist`, file biner & file besar (>400
 
 - 5173 — Vite dev server (frontend)
 - 8787 — API server (backend)
-- 8002 — gemini-api-server (Google AI Studio)
-- 8010 — openrouter-server (OpenRouter)
+- 8003 — gemini-server lokal project ini (cookie auth)
 
-## Systemd services
+## Gemini server lokal
 
-Semua server AI bisa dijalankan sebagai service:
+Untuk menjalankan service AI tanpa aplikasi:
 
 ```bash
-# Enable & start
-systemctl --user enable --now gemini-api-server openrouter-server
-
-# Status
-systemctl --user status gemini-api-server openrouter-server
-
-# Logs
-journalctl --user -u gemini-api-server -f
+npm run ai
 ```
 
-Service files: `~/.config/systemd/user/gemini-api-server.service`, dll.
+Service ini stateless: histori dan sesi percakapan disimpan oleh backend Sensei Mentor, sedangkan cookie akun dibaca dari `gemini-server/.env`. File `.env` dan cache cookie `.cache/` sudah di-gitignore. Jika `HOST` diganti dari loopback, `API_SECRET` wajib diisi.
 
 ## Git push (SSH)
 
@@ -159,5 +138,5 @@ git push -u origin main
 
 - **Backend**: Node.js (node:http murni), SQLite (node:sqlite), TypeScript
 - **Frontend**: React 19, Vite, Tailwind CSS, TypeScript
-- **AI servers**: Python (FastAPI, uvicorn, httpx)
+- **AI server**: Python (FastAPI, uvicorn, gemini-webapi cookie auth)
 - **Markdown**: react-markdown, remark-gfm, remark-math, rehype-katex, rehype-highlight
