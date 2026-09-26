@@ -26,6 +26,13 @@ export const STATUS_META: Record<
   },
 };
 
+export function masteryTone(mastery: number): string {
+  if (mastery >= 85) return "bg-kirimochi";
+  if (mastery >= 60) return "bg-mew";
+  if (mastery >= 30) return "bg-sakura";
+  return "bg-mist";
+}
+
 export const PLAN_STATUS_META: Record<
   PlanStatus,
   { label: string; dot: string; chip: string }

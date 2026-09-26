@@ -50,6 +50,10 @@ export interface Topic {
   name: string;
   status: "mastered" | "learning" | "stuck" | "todo";
   notes: string;
+  mastery: number;
+  confidence: number;
+  evidence: string;
+  last_reviewed_at: string;
   conversation_id: number;
   updated_at: string;
 }
@@ -234,6 +238,10 @@ ensureColumn(
 );
 ensureColumn("messages", "mood", "mood TEXT NOT NULL DEFAULT ''");
 ensureColumn("profile", "workspace", "workspace TEXT NOT NULL DEFAULT ''");
+ensureColumn("topics", "mastery", "mastery INTEGER NOT NULL DEFAULT 0");
+ensureColumn("topics", "confidence", "confidence INTEGER NOT NULL DEFAULT 0");
+ensureColumn("topics", "evidence", "evidence TEXT NOT NULL DEFAULT ''");
+ensureColumn("topics", "last_reviewed_at", "last_reviewed_at TEXT NOT NULL DEFAULT ''");
 ensureColumn("profile", "ws_max_depth", "ws_max_depth INTEGER NOT NULL DEFAULT 7");
 ensureColumn("profile", "ws_max_files", "ws_max_files INTEGER NOT NULL DEFAULT 350");
 ensureColumn("profile", "ws_auto_kb", "ws_auto_kb INTEGER NOT NULL DEFAULT 0");
@@ -536,46 +544,199 @@ export function listTopicsByConversation(conversationId: number): Topic[] {
 
 const TOPIC_STATUSES = new Set(["mastered", "learning", "stuck", "todo"]);
 
+export const MASTERY_MASTERED_MIN = 60;
+export const MASTERY_MAX_GAIN_PER_TURN = 20;
+
+function clampPercent(value: number | undefined, fallback = 0): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+export interface TopicEvidence {
+  mastery?: number;
+  confidence?: number;
+  evidence?: string;
+}
+
+export interface TopicWriteResult {
+  id: number;
+  status: string;
+  mastery: number;
+  downgraded: boolean;
+}
+
+function enforceEvidenceRules(
+  status: string,
+  mastery: number,
+  evidence: string,
+): { status: string; mastery: number; downgraded: boolean } {
+  if (status !== "mastered") return { status, mastery, downgraded: false };
+  if (evidence && mastery >= MASTERY_MASTERED_MIN) {
+    return { status, mastery, downgraded: false };
+  }
+  return {
+    status: "learning",
+    mastery: evidence ? mastery : Math.min(mastery, MASTERY_MASTERED_MIN - 1),
+    downgraded: true,
+  };
+}
+
 export function upsertTopic(
   name: string,
   status: string,
   notes: string = "",
   conversationId = 0,
+  extra: TopicEvidence = {},
 ): number {
+  return writeTopic(name, status, notes, conversationId, extra).id;
+}
+
+export function writeTopic(
+  name: string,
+  status: string,
+  notes: string,
+  conversationId: number,
+  extra: TopicEvidence,
+): TopicWriteResult {
   const cleanName = name.trim().slice(0, 120);
-  if (!cleanName) return 0;
-  const cleanStatus = TOPIC_STATUSES.has(status) ? status : "learning";
+  if (!cleanName) {
+    return { id: 0, status: "", mastery: 0, downgraded: false };
+  }
+  const requested = TOPIC_STATUSES.has(status) ? status : "learning";
   const existing = db
     .prepare(
-      "SELECT id FROM topics WHERE name = ? COLLATE NOCASE AND conversation_id = ?",
+      `SELECT id, mastery, confidence, evidence, last_reviewed_at FROM topics
+       WHERE name = ? COLLATE NOCASE AND conversation_id = ?`,
     )
-    .get(cleanName, conversationId) as { id: number } | undefined;
+    .get(cleanName, conversationId) as
+    | {
+        id: number;
+        mastery: number;
+        confidence: number;
+        evidence: string;
+        last_reviewed_at: string;
+      }
+    | undefined;
+
+  const prevMastery = existing?.mastery ?? 0;
+  const evidence = (extra.evidence ?? existing?.evidence ?? "").trim().slice(0, 300);
+  const proposed = extra.mastery === undefined ? prevMastery : clampPercent(extra.mastery);
+  const mastery =
+    proposed > prevMastery
+      ? Math.min(proposed, prevMastery + MASTERY_MAX_GAIN_PER_TURN)
+      : proposed;
+  const confidence =
+    extra.confidence === undefined
+      ? (existing?.confidence ?? 0)
+      : clampPercent(extra.confidence, existing?.confidence ?? 0);
+
+  const ruled = enforceEvidenceRules(requested, mastery, evidence);
+
   if (existing) {
     db.prepare(
-      "UPDATE topics SET status = ?, notes = ?, updated_at = datetime('now') WHERE id = ?",
-    ).run(cleanStatus, notes.slice(0, 300), existing.id);
-    return existing.id;
+      `UPDATE topics SET status = ?, notes = ?, mastery = ?, confidence = ?, evidence = ?,
+         last_reviewed_at = CASE WHEN ? <> '' THEN datetime('now') ELSE last_reviewed_at END,
+         updated_at = datetime('now')
+       WHERE id = ?`,
+    ).run(
+      ruled.status,
+      notes.slice(0, 300),
+      ruled.mastery,
+      confidence,
+      evidence,
+      evidence,
+      existing.id,
+    );
+    return { id: existing.id, ...ruled };
   }
+
   const result = db
     .prepare(
-      "INSERT INTO topics (name, status, notes, conversation_id) VALUES (?, ?, ?, ?)",
+      `INSERT INTO topics (name, status, notes, mastery, confidence, evidence, last_reviewed_at, conversation_id)
+       VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? <> '' THEN datetime('now') ELSE '' END, ?)`,
     )
-    .run(cleanName, cleanStatus, notes.slice(0, 300), conversationId);
-  return Number(result.lastInsertRowid);
+    .run(
+      cleanName,
+      ruled.status,
+      notes.slice(0, 300),
+      ruled.mastery,
+      confidence,
+      evidence,
+      evidence,
+      conversationId,
+    );
+  return { id: Number(result.lastInsertRowid), ...ruled };
 }
 
 export function patchTopic(
   id: number,
-  patch: { name?: string; status?: string; notes?: string },
+  patch: {
+    name?: string;
+    status?: string;
+    notes?: string;
+    mastery?: number;
+    confidence?: number;
+    evidence?: string;
+  },
 ): void {
-  const allowed = ["name", "status", "notes"];
-  const keys = allowed.filter((k) => patch[k as keyof typeof patch] !== undefined);
-  if (keys.length === 0) return;
-  const sets = keys.map((k) => `${k} = ?`).join(", ");
-  const values = keys.map((k) => String(patch[k as keyof typeof patch]));
+  const current = db
+    .prepare(
+      "SELECT status, mastery, confidence, evidence FROM topics WHERE id = ?",
+    )
+    .get(id) as
+    | { status: string; mastery: number; confidence: number; evidence: string }
+    | undefined;
+  if (!current) return;
+
+  const keys: string[] = [];
+  const values: (string | number)[] = [];
+
+  if (patch.name !== undefined) {
+    const name = patch.name.trim().slice(0, 120);
+    if (name) {
+      keys.push("name = ?");
+      values.push(name);
+    }
+  }
+  if (patch.notes !== undefined) {
+    keys.push("notes = ?");
+    values.push(patch.notes.slice(0, 300));
+  }
+
+  const evidence =
+    patch.evidence !== undefined
+      ? patch.evidence.trim().slice(0, 300)
+      : current.evidence;
+  const requestedMastery =
+    patch.mastery === undefined
+      ? current.mastery
+      : clampPercent(patch.mastery, current.mastery);
+  const mastery =
+    requestedMastery > current.mastery
+      ? Math.min(requestedMastery, current.mastery + MASTERY_MAX_GAIN_PER_TURN)
+      : requestedMastery;
+  const confidence =
+    patch.confidence === undefined
+      ? current.confidence
+      : clampPercent(patch.confidence, current.confidence);
+
+  const requestedStatus =
+    patch.status !== undefined && TOPIC_STATUSES.has(patch.status)
+      ? patch.status
+      : current.status;
+  const ruled = enforceEvidenceRules(requestedStatus, mastery, evidence);
+
+  keys.push("status = ?", "mastery = ?", "confidence = ?", "evidence = ?");
+  values.push(ruled.status, ruled.mastery, confidence, evidence);
+  keys.push(
+    "last_reviewed_at = CASE WHEN ? <> '' THEN datetime('now') ELSE last_reviewed_at END",
+  );
+  values.push(evidence);
+
+  values.push(id);
   db.prepare(
-    `UPDATE topics SET ${sets}, updated_at = datetime('now') WHERE id = ?`,
-  ).run(...values, String(id));
+    `UPDATE topics SET ${keys.join(", ")}, updated_at = datetime('now') WHERE id = ?`,
+  ).run(...values);
 }
 
 export function deleteTopic(id: number): void {

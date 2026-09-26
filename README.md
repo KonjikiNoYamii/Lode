@@ -67,6 +67,7 @@ Frontend + API dilayani di http://localhost:8787; service AI tetap berjalan loka
 - **Render `<Sequence>/<Step>`** dari output Gemini jadi daftar terstruktur.
 - **Memori persisten**: profil, histori, progress, dan catatan mentor tersimpan di SQLite (`backend/data/mentor.db`) dan tetap bisa dibuka kembali.
 - **Progress otomatis** — setelah tiap percakapan, Lode mencatat topik yang dikuasai / sedang dipelajari / buntu, lalu topik yang sudah dikuasai tidak akan dijelaskan ulang.
+- **Mastery berbasis bukti** — tiap topik punya skor penguasaan 0-100 plus bukti konkret (mis. "menjawab 3 soal tanpa bantuan"). Sistem membatasi kenaikan maksimal +20 per giliran dan menolak status `Dikuasai` bila skor < 60 atau bukti kosong, jadi tidak ada topik yang magically "mastered".
 - **Riwayat percakapan** — semua chat tersimpan, bisa dibuka kapan saja. Mentornya tidak "ganti-ganti".
 - **Roadmap-anchored mentoring** — Lode mengikuti roadmap belajar (mis. `ROADMAP.md`) dan tidak melompat ke materi lanjutan sebelum dasar selesai.
 - **Rencana belajar terstruktur** — plan per percakapan tersimpan di database (fase, target, prasyarat, status), jadi urutan belajar tidak hanya mengandalkan file. Lode memakai plan ini sebagai sumber kebenaran dan bisa menandai item selesai sendiri lewat marker `@@plan`; status juga bisa diubah manual dari panel **Rencana Belajar**.

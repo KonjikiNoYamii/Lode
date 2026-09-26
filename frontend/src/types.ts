@@ -53,6 +53,10 @@ export interface Topic {
   name: string;
   status: TopicStatus;
   notes: string;
+  mastery: number;
+  confidence: number;
+  evidence: string;
+  last_reviewed_at: string;
   conversation_id: number;
   updated_at: string;
 }

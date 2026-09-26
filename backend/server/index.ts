@@ -29,8 +29,8 @@ import {
   patchTopic,
   runMaintenance,
   updateProfile,
-  upsertTopic,
   upsertWorkspaceFile,
+  writeTopic,
 } from "../lib/db";
 import {
   aiRequestHeaders,
@@ -956,10 +956,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (method === "GET") return sendJson(res, 200, { topics: listTopics() });
     if (method === "POST") {
       const b = await readJson(req);
-      upsertTopic(
+      writeTopic(
         String(b.name ?? ""),
         String(b.status ?? "learning"),
         String(b.notes ?? ""),
+        0,
+        {
+          mastery: b.mastery as number | undefined,
+          confidence: b.confidence as number | undefined,
+          evidence: b.evidence as string | undefined,
+        },
       );
       return sendJson(res, 200, { topics: listTopics() });
     }
@@ -973,6 +979,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         name: b.name as string | undefined,
         status: b.status as string | undefined,
         notes: b.notes as string | undefined,
+        mastery: b.mastery as number | undefined,
+        confidence: b.confidence as number | undefined,
+        evidence: b.evidence as string | undefined,
       });
       return sendJson(res, 200, { ok: true });
     }
@@ -1097,7 +1106,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     const parsed = parseMemoryUpdate(text);
-    for (const t of parsed.topics) upsertTopic(t.name, t.status, t.notes, cid);
+    for (const t of parsed.topics) {
+      writeTopic(t.name, t.status, t.notes, cid, {
+        mastery: t.mastery,
+        confidence: t.confidence,
+        evidence: t.evidence,
+      });
+    }
     for (const m of parsed.memories) addMemory(m.type, m.content, cid);
 
     return sendJson(res, 200, {

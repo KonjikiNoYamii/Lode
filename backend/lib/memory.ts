@@ -25,7 +25,7 @@ export function buildSystemPrompt(
       ? topics
           .map(
             (t) =>
-              `- [${t.status}] ${t.name}${t.notes ? ` — ${t.notes}` : ""}`,
+              `- [${t.status}${t.mastery ? ` ${t.mastery}%` : ""}] ${t.name}${t.notes ? ` — ${t.notes}` : ""}${t.evidence ? ` (bukti: ${t.evidence})` : ""}`,
           )
           .join("\n")
       : "Belum ada catatan topik.";
@@ -60,8 +60,8 @@ export function buildSystemPrompt(
     workspaceContext ? `\n${workspaceContext}\n` : "",
     "=== ATURAN MENTOR ===",
     "1. Kamu adalah mentor yang SAMA di setiap sesi. Ingat betul progress dan catatan di atas, dan lanjutkan dari titik terakhir pelajar.",
-    "2. JANGAN mengulang ulang materi yang berstatus [mastered]. Kalau pelajar sedang [learning] atau [stuck], fokus di situ dan ajarkan langkah demi langkah.",
-    "3. Kalau pelajar menunjukkan pemahaman baru (bisa jawab/berhasil), akui dan catat di pikiranmu — progress akan dicatat otomatis oleh sistem.",
+    "2. JANGAN mengulang ulang materi yang berstatus [mastered]. Kalau pelajar sedang [learning] atau [stuck], fokus di situ dan ajarkan langkah demi langkah. Angka mastery di progress menentukan seberapa dalam penjelasanmu: di bawah 45% boleh banyak analogi, di atas 60% wajib ada latihan mandiri supaya benar-benar dipastikan pelajar bisa memakai, bukan cuma hafal.",
+    "3. Kalau pelajar menunjukkan pemahaman baru (bisa jawab/berhasil), akui dan catat di pikiranmu — progress, mastery, dan buktinya akan dicatat otomatis oleh sistem. Jangan MENYATAKAN topik sudah dikuasai kalau belum ada bukti nyata (menjawab benar, kode jalan, atau menjelaskannya kembali dengan benar).",
     "4. JELASKAN MATERI SECARA RINCI & LENGKAP. Jangan jawab singkat/superfisial — pelajar justru BINGUNG kalau penjelasannya pendek/tidak detail. Untuk tiap konsep baru, paparkan minimal: (a) apa itu & kenapa penting, (b) bagaimana cara kerjanya langkah demi langkah, (c) contoh konkret yang BISA dijalankan/dicoba, (d) kesalahan umum yang sering terjadi. Sesuaikan kedalaman dengan level pelajar, tapi jangan pernah menyingkat materi yang sedang diajarkan hanya demi ringkas.",
     "5. Beri latihan kecil / pertanyaan cek pemahaman sesekali, mirip tutor bimbel yang ngasih PR.",
     "6. Jawab dengan bahasa santai tapi tetap jelas. Sedikit nuansa anime/waifu yang asyik boleh, selama tidak mengganggu materi.",
@@ -93,7 +93,12 @@ export function buildMemoryUpdatePrompt(
   chatLines: string,
 ): string {
   const topicsJSON = topics.length
-    ? topics.map((t) => `{ name: "${t.name}", status: "${t.status}" }`).join(", ")
+    ? topics
+        .map(
+          (t) =>
+            `{ name: "${t.name}", status: "${t.status}", mastery: ${t.mastery}, evidence: "${t.evidence}" }`,
+        )
+        .join(", ")
     : "-";
 
   const memoriesJSON = memories.length
@@ -118,12 +123,21 @@ export function buildMemoryUpdatePrompt(
     '   - "learning": baru mulai dipelajari, masih proses',
     '   - "stuck": pelajar bingung atau menemukan error',
     '   - "todo": perlu dipelajari selanjutnya',
-    "2. Ekstrak maksimal 3 memori baru: fakta pribadi pelajar, preferensi belajar, atau insight kemajuan (tipe: fact / preference / progress / insight).",
+    "2. Nilai juga tingkat penguasaan (mastery) 0-100 secara JUJUR:",
+    "   - 0-20: baru menyentuh topik",
+    "   - 21-45: paham sebagian, masih banyak goshala",
+    "   - 46-59: paham konsep inti tapi belum bisa dipakai sendiri",
+    "   - 60-84: bisa menjelaskan & memakai dengan bantuan ringan",
+    "   - 85-100: bisa memakai tanpa bantuan & bisa menjelaskannya ke orang lain",
+    "   Jangan asal naik. Kalau pelajar cuma nodding atau belum menjawab apa-apa, jangan naikkan mastery.",
+    "3. Tulis 'bukti' singkat dan KONKRET yang terlihat di percakapan ini (mis. \"menjawab benar soal dereference tanpa bantuan\"). Kalau tidak ada bukti nyata, tulis 'bukti: -' dan JANGAN tandai mastered.",
+    "4. Tulis 'yakin' 0-100 = seberapa yakin kamu pada bukti itu (bukti dari kuis/uji = tinggi, QTLintas saja = rendah).",
+    "5. Ekstrak maksimal 3 memori baru: fakta pribadi pelajar, preferensi belajar, atau insight kemajuan (tipe: fact / preference / progress / insight).",
     "",
     "JAWAB HANYA dengan format berikut, TANPA teks lain:",
     "TOPICS:",
-    "- [status] Nama Topik: catatan singkat satu kalimat",
-    "  (Gunakan titik dua diikuti spasi ': ' sebagai pemisah nama dan catatan. Boleh sertakan identifer teknis seperti std::cout dalam nama, selama diikuti ': ' untuk catatan.)",
+    "- [status] Nama Topik: catatan singkat satu kalimat || mastery=70 || bukti=menjawab soal tanpa bantuan || yakin=70",
+    "  (Gunakan titik dua diikuti spasi ': ' sebagai pemisah nama dan catatan. Boleh sertakan identifer teknis seperti std::cout dalam nama, selama diikuti ': ' untuk catatan. Bagian '|| mastery= || bukti= || yakin=' wajib diisi, dengan angka 0-100 dan teks singkat tanpa tanda '|'.)",
     "MEMORY:",
     "- [tipe] isi memori satu kalimat",
     "",
@@ -134,11 +148,50 @@ export function buildMemoryUpdatePrompt(
 const STATUSES = new Set(["mastered", "learning", "stuck", "todo"]);
 const MEMORY_TYPES = new Set(["fact", "preference", "progress", "insight"]);
 
+export interface ParsedTopicUpdate {
+  name: string;
+  status: string;
+  notes: string;
+  mastery?: number;
+  confidence?: number;
+  evidence?: string;
+}
+
+const EVIDENCE_META_RE = /\s*\|\|\s*(.*)$/;
+
+function parseEvidenceMeta(
+  rest: string,
+): { note: string; mastery?: number; confidence?: number; evidence?: string } {
+  const match = rest.match(EVIDENCE_META_RE);
+  if (!match) return { note: rest.trim() };
+  const note = rest.slice(0, match.index).trim();
+  const fields: Record<string, string> = {};
+  for (const chunk of match[1].split("||")) {
+    const eq = chunk.indexOf("=");
+    if (eq === -1) continue;
+    fields[chunk.slice(0, eq).trim().toLowerCase()] = chunk.slice(eq + 1).trim();
+  }
+  const num = (key: string): number | undefined => {
+    const raw = fields[key];
+    if (raw === undefined) return undefined;
+    const value = Number.parseInt(raw, 10);
+    return Number.isFinite(value) ? value : undefined;
+  };
+  const evidenceRaw = fields["bukti"] ?? fields["evidence"];
+  const evidence = evidenceRaw && evidenceRaw !== "-" ? evidenceRaw : undefined;
+  return {
+    note,
+    mastery: num("mastery"),
+    confidence: num("yakin") ?? num("confidence"),
+    evidence,
+  };
+}
+
 export function parseMemoryUpdate(text: string): {
-  topics: { name: string; status: string; notes: string }[];
+  topics: ParsedTopicUpdate[];
   memories: { type: string; content: string }[];
 } {
-  const topics: { name: string; status: string; notes: string }[] = [];
+  const topics: ParsedTopicUpdate[] = [];
   const memories: { type: string; content: string }[] = [];
 
   let section: "topics" | "memories" | null = null;
@@ -172,12 +225,16 @@ export function parseMemoryUpdate(text: string): {
       // supaya identifer C++ seperti std::cout tidak salah terpotong.
       const sep = rest.indexOf(": ");
       const name = (sep === -1 ? rest : rest.slice(0, sep)).trim();
-      const notes = sep === -1 ? "" : rest.slice(sep + 2).trim();
+      const meta = parseEvidenceMeta(sep === -1 ? "" : rest.slice(sep + 2));
+      const notes = meta.note;
       if (name && STATUSES.has(tag)) {
         topics.push({
           name,
           status: tag,
           notes: notes || `Diproses saat percakapan terakhir`,
+          mastery: meta.mastery,
+          confidence: meta.confidence,
+          evidence: meta.evidence,
         });
       }
     } else if (section === "memories") {

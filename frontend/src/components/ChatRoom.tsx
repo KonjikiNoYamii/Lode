@@ -24,7 +24,7 @@ import MentorAvatar, {
   MOOD_THEME,
   getCandidateUrls,
 } from "./MentorAvatar";
-import { STATUS_META } from "./status";
+import { STATUS_META, masteryTone } from "./status";
 
 const STATUS_ORDER: TopicStatus[] = ["mastered", "learning", "stuck", "todo"];
 const PLAN_STATUSES: PlanStatus[] = ["todo", "learning", "done", "stuck"];
@@ -861,6 +861,24 @@ export default function ChatRoom({
                             {t.notes}
                           </p>
                         )}
+                        <div className="mt-2.5">
+                          <div className="mb-1 flex items-center justify-between text-[9px] font-bold text-mist/80">
+                            <span>Penguasaan</span>
+                            <span>{t.mastery}%</span>
+                          </div>
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                            <div
+                              className={`h-full rounded-full transition-all ${masteryTone(t.mastery)}`}
+                              style={{ width: `${Math.max(t.mastery, 2)}%` }}
+                            />
+                          </div>
+                          {t.evidence && (
+                            <p className="mt-1.5 text-[10px] leading-relaxed text-mist/70 break-words">
+                              Bukti: {t.evidence}
+                              {t.confidence > 0 ? ` · yakin ${t.confidence}%` : ""}
+                            </p>
+                          )}
+                        </div>
                       </li>
                     );
                   })}
