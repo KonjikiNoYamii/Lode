@@ -1,3 +1,5 @@
+import { REVIEW_INSTRUCTIONS } from "./srs";
+
 export type LearnMode = "auto" | "konsep" | "latihan" | "proyek" | "uji" | "ingat";
 
 export const LEARN_MODES: LearnMode[] = [
@@ -12,7 +14,7 @@ export const LEARN_MODES: LearnMode[] = [
 export const MODE_META: Record<LearnMode, { label: string; hint: string }> = {
   auto: {
     label: "Auto",
-    hint: "Lode sendiri yang memilih mode tiap giliran)",
+    hint: "Lode sendiri yang memilih mode tiap giliran",
   },
   konsep: {
     label: "Konsep",
@@ -135,13 +137,19 @@ const MODE_INSTRUCTIONS: Record<Exclude<LearnMode, "auto">, string[]> = {
   ],
 };
 
-export function buildModeContext(mode: LearnMode, reason: string, locked: boolean): string {
+export function buildModeContext(
+  mode: LearnMode,
+  reason: string,
+  locked: boolean,
+  review = "",
+): string {
   if (mode === "auto") return "";
   const instructions = MODE_INSTRUCTIONS[mode];
   return [
     `=== MODE BELAJAR SEKARANG: ${MODE_META[mode].label.toUpperCase()} ===`,
     `Alasan: ${reason}. ${locked ? "Mode ini dikunci oleh pelajar, jadi PATUHI dan jangan berganti." : "Mode ini dipilih otomatis oleh sistem."}`,
     ...instructions,
+    ...(mode === "ingat" && review ? [...REVIEW_INSTRUCTIONS, review] : []),
     `Boleh pindah mode kalau alasannya jelas: tulis marker @@mode("konsep"|"latihan"|"proyek"|"uji"|"ingat") di baris PALING AKHIR jawabanmu. Marker itu disembunyikan dari tampilan.`,
   ].join("\n");
 }

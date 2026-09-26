@@ -6,20 +6,24 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { send as apiSend } from "@/api";
 import type {
   LearnMode,
   Memory,
   Message,
   Mood,
+  CardRating,
   PlanItem,
   PlanStatus,
   Profile,
+  ReviewCard,
   Topic,
   TopicStatus,
 } from "@/types";
 import { GraduationCap, BookOpen } from "lucide-react";
 import { Markdown } from "./Markdown";
 import PlanPanel from "./PlanPanel";
+import ReviewPanel from "./ReviewPanel";
 import { MODE_META } from "./mode";
 import MentorAvatar, {
   MOODS,
@@ -31,6 +35,7 @@ import { STATUS_META, masteryTone } from "./status";
 const STATUS_ORDER: TopicStatus[] = ["mastered", "learning", "stuck", "todo"];
 const PLAN_STATUSES: PlanStatus[] = ["todo", "learning", "done", "stuck"];
 const MODES: LearnMode[] = ["auto", "konsep", "latihan", "proyek", "uji", "ingat"];
+const RATINGS: CardRating[] = ["lupa", "nyaris", "ingat"];
 
 function FilterChip({
   active,
@@ -67,6 +72,7 @@ function stripStreamMood(s: string): string {
   return s
     .replace(/\n?@@mood:[a-z]+\s*/g, "")
     .replace(/\n?@@plan:\d+:[a-z]+\s*/g, "")
+    .replace(/\n?@@card:\d+:[a-z]+\s*/g, "")
     .replace(/\n?@@mode:[a-z]+\s*/g, "");
 }
 
@@ -126,6 +132,8 @@ interface Props {
   topics?: Topic[];
   memories?: Memory[];
   plan?: PlanItem[];
+  cards?: ReviewCard[];
+  onCardsUpdated: (cards: ReviewCard[]) => void;
   mode?: LearnMode;
   effectiveMode?: LearnMode;
   totalMessages?: number;
@@ -228,6 +236,8 @@ export default function ChatRoom({
   topics = [],
   memories = [],
   plan = [],
+  cards = [],
+  onCardsUpdated,
   mode = "auto",
   effectiveMode = "konsep",
   totalMessages = 0,
@@ -512,6 +522,19 @@ export default function ChatRoom({
       const modeMatch = acc.match(/@@mode:([a-z]+)/);
       if (modeMatch && MODES.includes(modeMatch[1] as LearnMode)) {
         onEffectiveMode(modeMatch[1] as LearnMode);
+      }
+
+      const cardMatch = acc.match(/@@card:(\d+):([a-z]+)/);
+      if (cardMatch) {
+        const cardId = Number(cardMatch[1]);
+        const rating = cardMatch[2] as CardRating;
+        if (Number.isSafeInteger(cardId) && RATINGS.includes(rating)) {
+          void apiSend<{ cards: ReviewCard[] }>(`/api/cards/${cardId}`, "PATCH", {
+          rating,
+        })
+          .then((r) => onCardsUpdated(r.cards))
+          .catch(() => undefined);
+        }
       }
 
       if (result.error) setError(result.error);
@@ -824,6 +847,12 @@ export default function ChatRoom({
             conversationId={currentId}
             plan={plan}
             onPlanUpdated={onPlanUpdated}
+          />
+
+          <ReviewPanel
+            conversationId={currentId}
+            cards={cards}
+            onCardsUpdated={onCardsUpdated}
           />
 
 {/* Section: Progress Belajar */}

@@ -9,6 +9,7 @@ import type {
   Memory,
   PlanItem,
   Profile,
+  ReviewCard,
   Topic,
 } from "@/types";
 
@@ -43,6 +44,7 @@ export default function ChatPage() {
   const [progressTopics, setProgressTopics] = useState<Topic[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [plan, setPlan] = useState<PlanItem[]>([]);
+  const [cards, setCards] = useState<ReviewCard[]>([]);
   const [mode, setMode] = useState<LearnMode>("auto");
   const [effectiveMode, setEffectiveMode] = useState<LearnMode>("konsep");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -64,19 +66,23 @@ export default function ChatPage() {
           topics: Topic[];
           memories: Memory[];
           plan?: PlanItem[];
+          cards?: ReviewCard[];
         }>(`/api/conversations/${id}/progress`);
         setProgressTopics(r.topics);
         setMemories(r.memories);
         setPlan(r.plan ?? []);
+        setCards(r.cards ?? []);
       } catch {
         setProgressTopics([]);
         setMemories([]);
         setPlan([]);
+        setCards([]);
       }
     } else {
       setProgressTopics([]);
       setMemories([]);
       setPlan([]);
+      setCards([]);
     }
   }, []);
 
@@ -233,6 +239,8 @@ export default function ChatPage() {
         topics={progressTopics}
         memories={memories}
         plan={plan}
+        cards={cards}
+        onCardsUpdated={setCards}
         mode={mode}
         effectiveMode={effectiveMode}
         totalMessages={totalMessages}

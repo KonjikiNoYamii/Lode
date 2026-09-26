@@ -83,6 +83,21 @@ export interface Memory {
   created_at: string;
 }
 
+export interface ReviewCard {
+  id: number;
+  conversation_id: number;
+  topic_id: number;
+  front: string;
+  back: string;
+  box: number;
+  due_at: string;
+  reviews: number;
+  lapses: number;
+  last_rating: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const DATA_DIR = path.resolve(process.env.DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 mkdirSync(DATA_DIR, { recursive: true });
 
@@ -163,6 +178,23 @@ CREATE TABLE IF NOT EXISTS plan_items (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_plan_conv ON plan_items(conversation_id, phase, order_index);
+
+CREATE TABLE IF NOT EXISTS review_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL DEFAULT 0,
+  topic_id INTEGER NOT NULL DEFAULT 0,
+  front TEXT NOT NULL,
+  back TEXT NOT NULL DEFAULT '',
+  box INTEGER NOT NULL DEFAULT 1,
+  due_at TEXT NOT NULL DEFAULT (datetime('now')),
+  reviews INTEGER NOT NULL DEFAULT 0,
+  lapses INTEGER NOT NULL DEFAULT 0,
+  last_rating TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cards_conv_due ON review_cards(conversation_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_cards_topic ON review_cards(topic_id);
 `);
 
 db.prepare("INSERT OR IGNORE INTO profile (id) VALUES (1)").run();
@@ -385,6 +417,7 @@ export function deleteConversation(id: number): void {
   db.prepare("DELETE FROM memories WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM workspace_files WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM plan_items WHERE conversation_id = ?").run(id);
+  db.prepare("DELETE FROM review_cards WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
   walCheckpoint();
 }
@@ -560,6 +593,11 @@ const TOPIC_STATUSES = new Set(["mastered", "learning", "stuck", "todo"]);
 
 export const MASTERY_MASTERED_MIN = 60;
 export const MASTERY_MAX_GAIN_PER_TURN = 20;
+export const MASTERY_REVIEW_GAIN = 10;
+
+export function getTopic(id: number): Topic | undefined {
+  return db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic | undefined;
+}
 
 function clampPercent(value: number | undefined, fallback = 0): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
@@ -579,8 +617,22 @@ export interface TopicWriteResult {
   downgraded: boolean;
 }
 
-function enforceEvidenceRules(
-  status: string,
+/**
+ * Topik yang benar-benar dipelajari (ada bukti) otomatis punya kartu review,
+ * supaya materi yang sudah lewat tidak hilang dari ingatan.
+ */
+function syncCardForTopic(
+  topicId: number,
+  conversationId: number,
+  name: string,
+  evidence: string,
+  notes: string,
+): void {
+  if (!topicId || !conversationId || !evidence) return;
+  ensureCardForTopic(topicId, conversationId, name, evidence || notes);
+}
+
+function enforceEvidenceRules(  status: string,
   mastery: number,
   evidence: string,
 ): { status: string; mastery: number; downgraded: boolean } {
@@ -661,6 +713,7 @@ export function writeTopic(
       evidence,
       existing.id,
     );
+    syncCardForTopic(existing.id, conversationId, cleanName, evidence, notes);
     return { id: existing.id, ...ruled };
   }
 
@@ -679,7 +732,9 @@ export function writeTopic(
       evidence,
       conversationId,
     );
-  return { id: Number(result.lastInsertRowid), ...ruled };
+  const newId = Number(result.lastInsertRowid);
+  syncCardForTopic(newId, conversationId, cleanName, evidence, notes);
+  return { id: newId, ...ruled };
 }
 
 export function patchTopic(
@@ -946,4 +1001,162 @@ export function movePlanItem(
   db.prepare(
     "UPDATE plan_items SET order_index = ? WHERE id = ?",
   ).run(a, sibling.id);
+}
+// ---------- kartu review (spaced repetition) ----------
+
+export const MAX_CARD_BOX = 5;
+export const FIRST_CARD_DELAY_DAYS = 1;
+
+export function listReviewCards(conversationId: number): ReviewCard[] {
+  return db
+    .prepare(
+      `SELECT * FROM review_cards
+       WHERE conversation_id = ?
+       ORDER BY due_at ASC, id ASC`,
+    )
+    .all(conversationId) as unknown as ReviewCard[];
+}
+
+export function getReviewCard(id: number): ReviewCard | undefined {
+  return db.prepare("SELECT * FROM review_cards WHERE id = ?").get(id) as
+    | ReviewCard
+    | undefined;
+}
+
+/** Kartu milik percakapan ini saja — dipakai untuk memvalidasi marker AI. */
+export function getReviewCardForConversation(
+  id: number,
+  conversationId: number,
+): ReviewCard | undefined {
+  return db
+    .prepare(
+      "SELECT * FROM review_cards WHERE id = ? AND conversation_id = ?",
+    )
+    .get(id, conversationId) as ReviewCard | undefined;
+}
+
+export function countDueCards(conversationId: number): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM review_cards
+       WHERE conversation_id = ? AND due_at <= datetime('now')`,
+    )
+    .get(conversationId) as { c: number };
+  return Number(row.c) || 0;
+}
+
+export function createReviewCard(
+  conversationId: number,
+  input: { front: string; back?: string; topicId?: number; dueAt?: string; dueInDays?: number },
+): number {
+  const front = input.front.trim().slice(0, 200);
+  if (!front) return 0;
+  const absolute = String(input.dueAt ?? "").trim();
+  const days = Number(input.dueInDays);
+  const dueExpr = absolute
+    ? "?"
+    : Number.isFinite(days)
+      ? "datetime('now', ?)"
+      : "datetime('now', '+1 day')";
+  const dueValue = absolute
+    ? absolute
+    : Number.isFinite(days)
+      ? `+${Math.max(0, Math.trunc(days))} days`
+      : "";
+  const result = db
+    .prepare(
+      `INSERT INTO review_cards (conversation_id, topic_id, front, back, box, due_at)
+       VALUES (?, ?, ?, ?, 1, ${dueExpr})`,
+    )
+    .run(
+      conversationId,
+      Number(input.topicId) || 0,
+      front,
+      String(input.back ?? "").trim().slice(0, 500),
+      dueValue,
+    );
+  return Number(result.lastInsertRowid);
+}
+
+/** Satu kartu per topik: kartu yang ada diperbarui, bukan diduplikasi. */
+export function ensureCardForTopic(
+  topicId: number,
+  conversationId: number,
+  front: string,
+  back: string,
+): number {
+  if (!topicId || !conversationId) return 0;
+  const existing = db
+    .prepare(
+      "SELECT id FROM review_cards WHERE topic_id = ? AND conversation_id = ?",
+    )
+    .get(topicId, conversationId) as { id: number } | undefined;
+  if (existing) {
+    db.prepare(
+      `UPDATE review_cards
+         SET front = ?, back = CASE WHEN ? <> '' THEN ? ELSE back END,
+             updated_at = datetime('now')
+       WHERE id = ?`,
+    ).run(front.slice(0, 200), back, back.slice(0, 500), existing.id);
+    return existing.id;
+  }
+  return createReviewCard(conversationId, {
+    front,
+    back,
+    topicId,
+    dueInDays: FIRST_CARD_DELAY_DAYS,
+  });
+}
+
+export function patchReviewCard(
+  id: number,
+  patch: {
+    front?: string;
+    back?: string;
+    box?: number;
+    dueAt?: string;
+    rating?: string;
+    lapses?: number;
+  },
+): void {
+  const sets: string[] = [];
+  const values: (string | number)[] = [];
+  if (patch.front !== undefined) {
+    const front = patch.front.trim().slice(0, 200);
+    if (!front) return;
+    sets.push("front = ?");
+    values.push(front);
+  }
+  if (patch.back !== undefined) {
+    sets.push("back = ?");
+    values.push(patch.back.trim().slice(0, 500));
+  }
+  if (patch.box !== undefined) {
+    const box = Math.max(1, Math.min(MAX_CARD_BOX, Math.trunc(patch.box) || 1));
+    sets.push("box = ?");
+    values.push(box);
+  }
+  if (patch.dueAt) {
+    sets.push("due_at = ?");
+    values.push(patch.dueAt);
+  }
+  if (patch.rating !== undefined) {
+    sets.push("last_rating = ?");
+    values.push(patch.rating.slice(0, 20));
+    sets.push("reviews = reviews + 1");
+  }
+  if (patch.lapses !== undefined) {
+    sets.push("lapses = ?");
+    values.push(Math.max(0, Math.trunc(patch.lapses) || 0));
+  }
+  if (sets.length === 0) return;
+  sets.push("updated_at = datetime('now')");
+  db.prepare(`UPDATE review_cards SET ${sets.join(", ")} WHERE id = ?`).run(
+    ...values,
+    id,
+  );
+}
+
+export function deleteReviewCard(id: number): void {
+  db.prepare("DELETE FROM review_cards WHERE id = ?").run(id);
 }

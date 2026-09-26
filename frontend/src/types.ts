@@ -67,7 +67,6 @@ export interface Topic {
 }
 
 export type PlanStatus = "todo" | "learning" | "done" | "stuck";
-
 export interface PlanItem {
   id: number;
   conversation_id: number;
@@ -85,6 +84,23 @@ export interface Memory {
   type: string;
   content: string;
   created_at: string;
+}
+
+export type CardRating = "lupa" | "nyaris" | "ingat";
+
+export interface ReviewCard {
+  id: number;
+  conversation_id: number;
+  topic_id: number;
+  front: string;
+  back: string;
+  box: number;
+  due_at: string;
+  reviews: number;
+  lapses: number;
+  last_rating: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface State {
