@@ -379,6 +379,9 @@ export interface WriteResult {
   rel: string;
   created: boolean;
   bytes: number;
+  changed?: boolean;
+  prev?: string | null;
+  next?: string;
   error?: string;
 }
 
@@ -457,6 +460,31 @@ export async function applyWorkspaceWrites(
       continue;
     }
     const created = !existsSync(target);
+    let prev: string | null = null;
+    if (!created) {
+      try {
+        prev = await fs.readFile(target, "utf8");
+      } catch (err) {
+        results.push({
+          rel: w.rel,
+          created: false,
+          bytes: 0,
+          error: `isi lama tidak bisa dibaca: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        continue;
+      }
+    }
+    if (prev === w.content) {
+      results.push({
+        rel: w.rel,
+        created,
+        bytes: w.content.length,
+        changed: false,
+        prev,
+        next: w.content,
+      });
+      continue;
+    }
     try {
       await fs.mkdir(path.dirname(target), { recursive: true });
       const realDir = await fs.realpath(path.dirname(target));
@@ -465,7 +493,14 @@ export async function applyWorkspaceWrites(
         continue;
       }
       await fs.writeFile(target, w.content, "utf8");
-      results.push({ rel: w.rel, created, bytes: w.content.length });
+      results.push({
+        rel: w.rel,
+        created,
+        bytes: w.content.length,
+        changed: true,
+        prev,
+        next: w.content,
+      });
     } catch (err) {
       results.push({
         rel: w.rel,
@@ -477,6 +512,51 @@ export async function applyWorkspaceWrites(
   }
 
   return results;
+}
+
+export interface RestoreResult {
+  rel: string;
+  ok: boolean;
+  removed?: boolean;
+  error?: string;
+}
+
+/**
+ * Kembalikan isi file ke versi tertentu. `content: null` berarti file belum
+ * ada pada versi itu, jadi undo menghapus file-nya.
+ */
+export async function restoreWorkspaceFile(
+  dir: string,
+  rel: string,
+  content: string | null,
+): Promise<RestoreResult> {
+  let root: string;
+  try {
+    root = await fs.realpath(dir);
+  } catch {
+    return { rel, ok: false, error: "Folder workspace tidak bisa diakses" };
+  }
+  const target = path.resolve(root, rel);
+  if (!isInside(root, target)) {
+    return { rel, ok: false, error: "di luar workspace" };
+  }
+  if (BINARY_EXT.has(path.extname(target).toLowerCase())) {
+    return { rel, ok: false, error: "ekstensi file dilarang" };
+  }
+  try {
+    if (content === null) {
+      await fs.rm(target, { force: true });
+      return { rel, ok: true, removed: true };
+    }
+    if (content.length > WRITE_MAX) {
+      return { rel, ok: false, error: "isi file terlalu besar (>100KB)" };
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf8");
+    return { rel, ok: true };
+  } catch (err) {
+    return { rel, ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export async function gatherFileDump(dir: string, rels: string[]): Promise<string> {

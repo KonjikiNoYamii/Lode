@@ -13,6 +13,7 @@ import type {
   Message,
   Mood,
   CardRating,
+  FileRevision,
   PlanItem,
   PlanStatus,
   Profile,
@@ -24,6 +25,7 @@ import { GraduationCap, BookOpen } from "lucide-react";
 import { Markdown } from "./Markdown";
 import PlanPanel from "./PlanPanel";
 import ReviewPanel from "./ReviewPanel";
+import FileHistoryPanel from "./FileHistoryPanel";
 import { MODE_META } from "./mode";
 import MentorAvatar, {
   MOODS,
@@ -73,6 +75,7 @@ function stripStreamMood(s: string): string {
     .replace(/\n?@@mood:[a-z]+\s*/g, "")
     .replace(/\n?@@plan:\d+:[a-z]+\s*/g, "")
     .replace(/\n?@@card:\d+:[a-z]+\s*/g, "")
+    .replace(/\n?@@files:\d+\s*/g, "")
     .replace(/\n?@@mode:[a-z]+\s*/g, "");
 }
 
@@ -134,6 +137,9 @@ interface Props {
   plan?: PlanItem[];
   cards?: ReviewCard[];
   onCardsUpdated: (cards: ReviewCard[]) => void;
+  revisions?: FileRevision[];
+  hasFolder?: boolean;
+  onRevisionsUpdated: () => void;
   mode?: LearnMode;
   effectiveMode?: LearnMode;
   totalMessages?: number;
@@ -238,6 +244,9 @@ export default function ChatRoom({
   plan = [],
   cards = [],
   onCardsUpdated,
+  revisions = [],
+  hasFolder = false,
+  onRevisionsUpdated,
   mode = "auto",
   effectiveMode = "konsep",
   totalMessages = 0,
@@ -523,6 +532,8 @@ export default function ChatRoom({
       if (modeMatch && MODES.includes(modeMatch[1] as LearnMode)) {
         onEffectiveMode(modeMatch[1] as LearnMode);
       }
+
+      if (acc.match(/@@files:\d+/)) onRevisionsUpdated();
 
       const cardMatch = acc.match(/@@card:(\d+):([a-z]+)/);
       if (cardMatch) {
@@ -853,6 +864,13 @@ export default function ChatRoom({
             conversationId={currentId}
             cards={cards}
             onCardsUpdated={onCardsUpdated}
+          />
+
+          <FileHistoryPanel
+            conversationId={currentId}
+            hasFolder={hasFolder}
+            revisions={revisions}
+            onRevisionsUpdated={onRevisionsUpdated}
           />
 
 {/* Section: Progress Belajar */}

@@ -17,11 +17,13 @@ import {
   deleteReviewCard,
   deleteTopic,
   getConversation,
+  getFileRevision,
   getProfile,
   getReviewCard,
   getReviewCardForConversation,
   getTopic,
   listConversations,
+  listFileRevisions,
   listMemories,
   listMemoriesByConversation,
   listMessages,
@@ -33,6 +35,7 @@ import {
   movePlanItem,
   patchConversation,
   patchPlanItem,
+  recordFileRevision,
   patchReviewCard,
   patchTopic,
   runMaintenance,
@@ -57,7 +60,8 @@ import {
   stripModeMarkers,
   type LearnMode,
 } from "../lib/mode";
-import { MASTERY_REVIEW_GAIN, type PlanStatus } from "../lib/db";
+import { MASTERY_REVIEW_GAIN, type FileRevision, type PlanStatus } from "../lib/db";
+import { diffLines } from "../lib/diff";
 import {
   buildReviewContext,
   dueCards,
@@ -74,9 +78,11 @@ import {
 import {
   applyWorkspaceWrites,
   buildAuthoredFilesContext,
+  restoreWorkspaceFile,
   buildWorkspaceContext,
   gatherFileDump,
   parseAgentBlocks,
+  type WriteResult,
   pickFolder,
   readWorkspaceFile,
   scanWorkspace,
@@ -351,6 +357,38 @@ function applyCardRatings(
     applied.push({ id, rating, box: schedule.box, due_at: schedule.dueAt });
   }
   return applied;
+}
+
+/**
+ * Catat isi lama setiap file yang berubah supaya bisa di-undo dari panel riwayat.
+ * Folder baru (rel berakhiran "/") dan file yang isinya sama tidak dicatat.
+ */
+function recordFileWrites(
+  conversationId: number,
+  results: WriteResult[],
+  source = "lode",
+): number {
+  let saved = 0;
+  for (const r of results) {
+    if (r.error || r.rel.endsWith("/") || !r.changed || r.next === undefined) continue;
+    const stat = diffLines(r.prev ?? "", r.next);
+    recordFileRevision({
+      conversationId,
+      rel: r.rel,
+      prev: r.prev ?? null,
+      next: r.next,
+      added: stat.added,
+      removed: stat.removed,
+      source,
+    });
+    saved += 1;
+  }
+  return saved;
+}
+
+function summarizeRevision(rev: FileRevision) {
+  const { content, ...rest } = rev;
+  return { ...rest, preview: content.slice(0, 4000) };
 }
 
 async function forgetGeminiSession(sessionId: string): Promise<boolean> {
@@ -704,6 +742,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const parsed = parseAgentBlocks(round1.full);
 
     let writeNotes = "";
+    let fileWrites = 0;
     const wantsWrites = parsed.writes.length > 0 || parsed.mkdirs.length > 0;
     if (wantsWrites) {
       if (folder && allowWrite) {
@@ -711,6 +750,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         const ok = results.filter((r) => !r.error && !r.rel.endsWith("/"));
         const fail = results.filter((r) => r.error);
         for (const r of ok) upsertWorkspaceFile(cid, r.rel);
+        fileWrites += recordFileWrites(cid, results);
         writeNotes =
           `\n[FILE/FOLDER DITULIS OLEH LODE: ${ok.length ? ok.map((r) => r.rel).join(", ") : "—"}]` +
           (fail.length
@@ -760,6 +800,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           const ok = results.filter((r) => !r.error && !r.rel.endsWith("/"));
           const fail = results.filter((r) => r.error);
           for (const r of ok) upsertWorkspaceFile(cid, r.rel);
+          fileWrites += recordFileWrites(cid, results);
           const note =
             `\n[FILE/FOLDER TAMBAHAN DITULIS: ${ok.length ? ok.map((r) => r.rel).join(", ") : "—"}]` +
             (fail.length
@@ -817,6 +858,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           const results = await applyWorkspaceWrites(folder, r2p);
           const ok = results.filter((r) => !r.error);
           const fail = results.filter((r) => r.error);
+          fileWrites += recordFileWrites(cid, results);
           const note =
             `\n\n> [Berkas ditulis oleh Lode: ${ok.length ? ok.map((r) => r.rel).join(", ") : "—"}]` +
             (fail.length
@@ -866,6 +908,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         }
         for (const card of cardUpdates) {
           res.write(`@@card:${card.id}:${card.rating}\n`);
+        }
+        if (fileWrites > 0) {
+          res.write(`@@files:${fileWrites}\n`);
         }
       }
     } else {
@@ -1030,6 +1075,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       plan: listPlanItems(cid),
       cards,
       due_cards: dueCards(cards).length,
+      revisions: listFileRevisions(cid, 20).map(summarizeRevision),
     });
   }
   const convMatch = p.match(/^\/api\/conversations\/(\d+)$/);
@@ -1167,6 +1213,96 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       deletePlanItem(id);
       return sendJson(res, 200, { ok: true });
     }
+  }
+
+  // ---------- riwayat file (undo) ----------
+  if (method === "GET" && p === "/api/revisions") {
+    const cid = Number(url.searchParams.get("conversationId")) || 0;
+    const limit = Number(url.searchParams.get("limit")) || 20;
+    if (!getConversation(cid)) {
+      return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    }
+    return sendJson(res, 200, {
+      revisions: listFileRevisions(cid, limit).map(summarizeRevision),
+    });
+  }
+  const revDiffMatch = p.match(/^\/api\/revisions\/(\d+)\/diff$/);
+  if (revDiffMatch && method === "GET") {
+    const rev = getFileRevision(Number(revDiffMatch[1]));
+    if (!rev) {
+      return sendJson(res, 404, { error: "Riwayat tidak ditemukan" });
+    }
+    const conv = getConversation(rev.conversation_id);
+    let current = "";
+    let truncated = false;
+    if (conv?.folder) {
+      try {
+        const file = await readWorkspaceFile(conv.folder, rev.rel, 400_000);
+        current = file?.content ?? "";
+        truncated = file?.truncated ?? false;
+      } catch {
+        current = "";
+      }
+    }
+    const stat = diffLines(rev.content, current);
+    return sendJson(res, 200, {
+      revision: summarizeRevision(rev),
+      diff: stat.diff,
+      added: stat.added,
+      removed: stat.removed,
+      truncated: stat.truncated,
+    });
+  }
+  const revRestoreMatch = p.match(/^\/api\/revisions\/(\d+)\/restore$/);
+  if (revRestoreMatch && method === "POST") {
+    const rev = getFileRevision(Number(revRestoreMatch[1]));
+    if (!rev) {
+      return sendJson(res, 404, { error: "Riwayat tidak ditemukan" });
+    }
+    const conv = getConversation(rev.conversation_id);
+    if (!conv?.folder) {
+      return sendJson(res, 400, {
+        error: "Percakapan ini tidak punya folder workspace",
+      });
+    }
+    let current: { content: string; truncated: boolean } | null = null;
+    try {
+      current = await readWorkspaceFile(conv.folder, rev.rel, 400_000);
+    } catch {
+      current = null;
+    }
+    // Status sekarang ikut dicatat supaya undo-nya bisa dibatalkan lagi.
+    // Kalau file terlalu besar untuk dibaca utuh, lewati snapshot daripada
+    // menyimpan isi yang terpotong.
+    if (!current?.truncated) {
+      recordFileWrites(
+        rev.conversation_id,
+        [
+          {
+            rel: rev.rel,
+            created: !current,
+            bytes: current?.content.length ?? 0,
+            changed: current?.content !== (rev.existed ? rev.content : ""),
+            prev: current?.content ?? null,
+            next: rev.existed ? rev.content : "",
+          },
+        ],
+        "undo",
+      );
+    }
+    const result = await restoreWorkspaceFile(
+      conv.folder,
+      rev.rel,
+      rev.existed ? rev.content : null,
+    );
+    if (!result.ok) {
+      return sendJson(res, 400, { error: result.error ?? "Gagal mengembalikan file" });
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      removed: result.removed ?? false,
+      revisions: listFileRevisions(rev.conversation_id, 20).map(summarizeRevision),
+    });
   }
 
   // ---------- kartu review (spaced repetition) ----------

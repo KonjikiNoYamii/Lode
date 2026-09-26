@@ -98,6 +98,19 @@ export interface ReviewCard {
   updated_at: string;
 }
 
+export interface FileRevision {
+  id: number;
+  conversation_id: number;
+  rel: string;
+  content: string;
+  existed: number;
+  bytes: number;
+  added: number;
+  removed: number;
+  source: string;
+  created_at: string;
+}
+
 const DATA_DIR = path.resolve(process.env.DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 mkdirSync(DATA_DIR, { recursive: true });
 
@@ -195,6 +208,20 @@ CREATE TABLE IF NOT EXISTS review_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_cards_conv_due ON review_cards(conversation_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_cards_topic ON review_cards(topic_id);
+
+CREATE TABLE IF NOT EXISTS file_revisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL DEFAULT 0,
+  rel TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  existed INTEGER NOT NULL DEFAULT 0,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  added INTEGER NOT NULL DEFAULT 0,
+  removed INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'lode',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_revisions_conv ON file_revisions(conversation_id, id);
 `);
 
 db.prepare("INSERT OR IGNORE INTO profile (id) VALUES (1)").run();
@@ -1159,4 +1186,69 @@ export function patchReviewCard(
 
 export function deleteReviewCard(id: number): void {
   db.prepare("DELETE FROM review_cards WHERE id = ?").run(id);
+}
+
+// ---------- riwayat file (backup & undo) ----------
+
+const REVISION_KEEP = 200;
+
+export interface RevisionInput {
+  conversationId: number;
+  rel: string;
+  prev: string | null;
+  next: string;
+  added?: number;
+  removed?: number;
+  source?: string;
+}
+
+/** Simpan isi file SEBELUM perubahan, supaya perubahan bisa dibatalkan. */
+export function recordFileRevision(input: RevisionInput): number {
+  const rel = input.rel.trim().slice(0, 300);
+  if (!rel || !input.conversationId) return 0;
+  const result = db
+    .prepare(
+      `INSERT INTO file_revisions (conversation_id, rel, content, existed, bytes, added, removed, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.conversationId,
+      rel,
+      input.prev ?? "",
+      input.prev === null ? 0 : 1,
+      Buffer.byteLength(input.prev ?? "", "utf8"),
+      Math.max(0, Math.trunc(input.added ?? 0)),
+      Math.max(0, Math.trunc(input.removed ?? 0)),
+      String(input.source ?? "lode").slice(0, 20),
+    );
+  db.prepare(
+    `DELETE FROM file_revisions
+     WHERE conversation_id = ? AND id NOT IN (
+       SELECT id FROM file_revisions WHERE conversation_id = ? ORDER BY id DESC LIMIT ?
+     )`,
+  ).run(input.conversationId, input.conversationId, REVISION_KEEP);
+  return Number(result.lastInsertRowid);
+}
+
+export function listFileRevisions(
+  conversationId: number,
+  limit = 20,
+): FileRevision[] {
+  return db
+    .prepare(
+      `SELECT * FROM file_revisions
+       WHERE conversation_id = ?
+       ORDER BY id DESC
+       LIMIT ?`,
+    )
+    .all(
+      conversationId,
+      Math.max(1, Math.min(100, Math.trunc(limit) || 20)),
+    ) as unknown as FileRevision[];
+}
+
+export function getFileRevision(id: number): FileRevision | undefined {
+  return db.prepare("SELECT * FROM file_revisions WHERE id = ?").get(id) as
+    | FileRevision
+    | undefined;
 }

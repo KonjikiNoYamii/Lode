@@ -109,3 +109,16 @@ export interface State {
   topics: Topic[];
   memories: Memory[];
 }
+
+export interface FileRevision {
+  id: number;
+  conversation_id: number;
+  rel: string;
+  existed: number;
+  bytes: number;
+  added: number;
+  removed: number;
+  source: string;
+  created_at: string;
+  preview: string;
+}
