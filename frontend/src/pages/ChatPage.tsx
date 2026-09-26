@@ -5,6 +5,7 @@ import ChatSidebar from "@/components/ChatSidebar";
 import ChatRoom from "@/components/ChatRoom";
 import type {
   Conversation,
+  LearnMode,
   Memory,
   PlanItem,
   Profile,
@@ -42,6 +43,8 @@ export default function ChatPage() {
   const [progressTopics, setProgressTopics] = useState<Topic[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [plan, setPlan] = useState<PlanItem[]>([]);
+  const [mode, setMode] = useState<LearnMode>("auto");
+  const [effectiveMode, setEffectiveMode] = useState<LearnMode>("konsep");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -87,12 +90,17 @@ export default function ChatPage() {
   const loadConversation = useCallback(
     async (id: number) => {
       try {
-        const data = await get<{ messages: Message[]; total_messages?: number }>(
-          `/api/conversations/${id}?limit=50`,
-        );
+        const data = await get<{
+          messages: Message[];
+          total_messages?: number;
+          mode?: LearnMode;
+          effective_mode?: LearnMode;
+        }>(`/api/conversations/${id}?limit=50`);
         setCurrentId(id);
         setMessages(data.messages);
         setTotalMessages(data.total_messages ?? data.messages.length);
+        setMode(data.mode ?? "auto");
+        setEffectiveMode(data.effective_mode ?? "konsep");
         setSideOpen(false);
         rememberConversation(id);
         await refresh(id);
@@ -169,6 +177,21 @@ export default function ChatPage() {
   const currentFolder =
     conversations.find((c) => c.id === currentId)?.folder ?? profile?.workspace ?? "";
 
+  const setModeForConversation = useCallback(
+    async (next: LearnMode) => {
+      setMode(next);
+      if (currentId) {
+        try {
+          await send(`/api/conversations/${currentId}`, "PATCH", { mode: next });
+        } catch {
+          return;
+        }
+      }
+      await refresh(currentId);
+    },
+    [currentId, refresh],
+  );
+
   const setFolder = useCallback(
     async (f: string) => {
       if (currentId) {
@@ -210,12 +233,16 @@ export default function ChatPage() {
         topics={progressTopics}
         memories={memories}
         plan={plan}
+        mode={mode}
+        effectiveMode={effectiveMode}
         totalMessages={totalMessages}
         onLoadEarlier={loadEarlierMessages}
         addMessages={addMessages}
         onNewConversation={onNewConversation}
         onMemoryUpdated={(id) => refresh(id)}
         onPlanUpdated={setPlan}
+        onSetMode={setModeForConversation}
+        onEffectiveMode={setEffectiveMode}
         onNewChat={newChat}
         onOpenSidebar={() => setSideOpen(true)}
         onSetFolder={setFolder}

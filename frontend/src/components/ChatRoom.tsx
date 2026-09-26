@@ -7,6 +7,7 @@ import {
   type RefObject,
 } from "react";
 import type {
+  LearnMode,
   Memory,
   Message,
   Mood,
@@ -19,6 +20,7 @@ import type {
 import { GraduationCap, BookOpen } from "lucide-react";
 import { Markdown } from "./Markdown";
 import PlanPanel from "./PlanPanel";
+import { MODE_META } from "./mode";
 import MentorAvatar, {
   MOODS,
   MOOD_THEME,
@@ -28,6 +30,7 @@ import { STATUS_META, masteryTone } from "./status";
 
 const STATUS_ORDER: TopicStatus[] = ["mastered", "learning", "stuck", "todo"];
 const PLAN_STATUSES: PlanStatus[] = ["todo", "learning", "done", "stuck"];
+const MODES: LearnMode[] = ["auto", "konsep", "latihan", "proyek", "uji", "ingat"];
 
 function FilterChip({
   active,
@@ -61,7 +64,10 @@ function isMood(v: string | undefined): v is Mood {
 }
 
 function stripStreamMood(s: string): string {
-  return s.replace(/\n?@@mood:[a-z]+\s*/g, "").replace(/\n?@@plan:\d+:[a-z]+\s*/g, "");
+  return s
+    .replace(/\n?@@mood:[a-z]+\s*/g, "")
+    .replace(/\n?@@plan:\d+:[a-z]+\s*/g, "")
+    .replace(/\n?@@mode:[a-z]+\s*/g, "");
 }
 
 function extractStreamResult(raw: string): { text: string; error: string } {
@@ -120,12 +126,16 @@ interface Props {
   topics?: Topic[];
   memories?: Memory[];
   plan?: PlanItem[];
+  mode?: LearnMode;
+  effectiveMode?: LearnMode;
   totalMessages?: number;
   onLoadEarlier?: () => Promise<void>;
   addMessages: (msgs: Message[]) => void;
   onNewConversation: (id: number, title: string) => void;
   onMemoryUpdated: (id: number) => void;
   onPlanUpdated: (plan: PlanItem[]) => void;
+  onSetMode: (mode: LearnMode) => void;
+  onEffectiveMode: (mode: LearnMode) => void;
   onNewChat: () => void;
   onOpenSidebar: () => void;
   onSetFolder: (folder: string) => Promise<void>;
@@ -218,12 +228,16 @@ export default function ChatRoom({
   topics = [],
   memories = [],
   plan = [],
+  mode = "auto",
+  effectiveMode = "konsep",
   totalMessages = 0,
   onLoadEarlier,
   addMessages,
   onNewConversation,
   onMemoryUpdated,
   onPlanUpdated,
+  onSetMode,
+  onEffectiveMode,
   onNewChat,
   onOpenSidebar,
   onSetFolder,
@@ -495,6 +509,11 @@ export default function ChatRoom({
         );
       }
 
+      const modeMatch = acc.match(/@@mode:([a-z]+)/);
+      if (modeMatch && MODES.includes(modeMatch[1] as LearnMode)) {
+        onEffectiveMode(modeMatch[1] as LearnMode);
+      }
+
       if (result.error) setError(result.error);
       if (result.text && !result.error) {
         addMessages([
@@ -745,6 +764,29 @@ export default function ChatRoom({
 
       {/* composer */}
       <div className="border-t border-white/10 px-4 py-3">
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-mist/70">
+            Mode
+          </span>
+          {MODES.map((m) => (
+            <button
+              key={m}
+              onClick={() => onSetMode(m)}
+              title={MODE_META[m].hint}
+              aria-pressed={mode === m}
+              className={`cursor-pointer select-none rounded-full border px-2.5 py-1 text-[10px] font-bold transition active:scale-95 ${
+                mode === m
+                  ? "border-mew/40 bg-mew/15 text-mew"
+                  : "border-white/10 bg-white/5 text-mist hover:border-white/25"
+              }`}
+            >
+              {MODE_META[m].label}
+            </button>
+          ))}
+          <span className="ml-auto text-[10px] text-mist/70">
+            {mode === "auto" ? `Auto → ${MODE_META[effectiveMode].label}` : "Dikunci"}
+          </span>
+        </div>
         <Composer sending={sending} onSend={send} textareaRef={sendingRef} />
       </div>
       </div>

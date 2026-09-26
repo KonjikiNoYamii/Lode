@@ -41,6 +41,14 @@ import {
 } from "../lib/ai";
 import { finalMood } from "../lib/mood";
 import { buildPlanContext, stripPlanMarkers } from "../lib/plan";
+import {
+  buildModeContext,
+  chooseMode,
+  isLearnMode,
+  normalizeMode,
+  stripModeMarkers,
+  type LearnMode,
+} from "../lib/mode";
 import type { PlanStatus } from "../lib/db";
 import {
   buildMemoryUpdatePrompt,
@@ -261,15 +269,38 @@ function extractMarkers(text: string): string[] {
   return out;
 }
 
-function stripMarkers(text: string, planSink?: Map<number, PlanStatus>): string {
-  const base = text
-    .replace(/@@read\("[^"]*"\)/g, "")
-    .replace(/@@mood\("[^"]*"\)/g, "");
+function stripMarkers(
+  text: string,
+  planSink?: Map<number, PlanStatus>,
+  modeSink?: Map<LearnMode, LearnMode>,
+): string {
+  const base = stripModeMarkers(
+    text
+      .replace(/@@read\("[^"]*"\)/g, "")
+      .replace(/@@mood\("[^"]*"\)/g, ""),
+    modeSink,
+  );
   return stripPlanMarkers(base, planSink);
 }
 
-async function forgetGeminiSession(sessionId: string): Promise<boolean> {
-  const profile = getProfile();
+function effectiveModeFor(
+  conversationId: number,
+  conv: { mode: string; ai_mode: string; folder: string },
+): LearnMode {
+  const topics = listTopicsByConversation(conversationId);
+  const choice = chooseMode({
+    message: "",
+    mode: normalizeMode(conv.mode),
+    aiMode: conv.ai_mode,
+    hasFolder: Boolean(conv.folder),
+    dueCards: 0,
+    stuckCount: topics.filter((t) => t.status === "stuck").length,
+    mastery: topics.reduce((max, t) => Math.max(max, t.mastery), 0),
+  });
+  return choice.mode === "auto" ? "konsep" : choice.mode;
+}
+
+async function forgetGeminiSession(sessionId: string): Promise<boolean> {  const profile = getProfile();
   const base = profile.ai_base_url.replace(/\/v1\/?$/, "");
   const headers = aiRequestHeaders();
   try {
@@ -387,6 +418,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const ACTIVE_CHAT_WINDOW = 50;
     const history = listMessages(cid).slice(-ACTIVE_CHAT_WINDOW);
 
+    const conv = getConversation(cid);
+    const modeChoice = chooseMode({
+      message,
+      mode: normalizeMode(conv?.mode),
+      aiMode: conv?.ai_mode ?? "",
+      hasFolder: Boolean(folder),
+      dueCards: 0,
+      stuckCount: topics.filter((t) => t.status === "stuck").length,
+      mastery: topics.reduce((max, t) => Math.max(max, t.mastery), 0),
+    });
+    const turnMode: LearnMode = modeChoice.mode === "auto" ? "konsep" : modeChoice.mode;
+
     const wsMaxDepth = clampInt(profile.ws_max_depth, 1, 12, 7);
     const wsMaxFiles = clampInt(profile.ws_max_files, 10, 3000, 350);
     const wsAutoKb = clampInt(profile.ws_auto_kb, 0, 5000, 0);
@@ -429,9 +472,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       allowWrite,
       authoredCtx,
       buildPlanContext(planItems),
+      buildModeContext(turnMode, modeChoice.reason, modeChoice.locked),
     );
 
     const planSink = new Map<number, PlanStatus>();
+    const modeSink = new Map<LearnMode, LearnMode>();
 
     const round1Payload = (): ChatItem[] => {
       const items: ChatItem[] = [{ role: "system", content: system }];
@@ -520,7 +565,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           const re = /@@read\("([^"]+)"\)/g;
           while ((m = re.exec(txt))) markers.add(m[1]);
         };
-        const stripMarkersAndTokens = (txt: string) => stripMarkers(txt, planSink);
+        const stripMarkersAndTokens = (txt: string) => stripMarkers(txt, planSink, modeSink);
         const run = async () => {
           try {
             const flt = makeWriteFilter();
@@ -620,10 +665,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     if (round1.mode === "collect" && round1.markers.size === 0 && round1.full.trim()) {
       // jawaban pendek tanpa marker — belum sempat di-stream
-      if (!res.writableEnded) res.write(stripMarkers(parsed.clean, planSink));
+      if (!res.writableEnded) res.write(stripMarkers(parsed.clean, planSink, modeSink));
     }
 
-    let finalText = stripMarkers(parsed.clean, planSink).trim();
+    let finalText = stripMarkers(parsed.clean, planSink, modeSink).trim();
 
     if (round1.markers.size > 0) {
       const rels = [...round1.markers];
@@ -644,7 +689,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink)));
+          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink)));
         });
         if (r2.thread) r1thread = r2.thread;
         if (!res.writableEnded) res.write(r2f.end());
@@ -659,9 +704,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             (fail.length
               ? `\n[GAGAL: ${fail.map((r) => `${r.rel} (${r.error})`).join("; ")}]`
               : "");
-          finalText = `${stripMarkers(r2Parsed.clean, planSink)}${note}`.trim() || finalText;
+          finalText = `${stripMarkers(r2Parsed.clean, planSink, modeSink)}${note}`.trim() || finalText;
         } else {
-          finalText = stripMarkers(r2Parsed.clean, planSink).trim() || finalText;
+          finalText = stripMarkers(r2Parsed.clean, planSink, modeSink).trim() || finalText;
         }
         if (r2.streamError) providerError = r2.streamError;
       } catch (err) {
@@ -702,7 +747,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink)));
+          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink)));
         });
         if (r2.thread) r1thread = r2.thread;
         if (!res.writableEnded) res.write(r2f.end());
@@ -740,12 +785,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     const planUpdates = [...planSink.entries()].filter(([pid]) => planIds.has(pid));
+    const aiMode = [...modeSink.values()].pop() ?? "";
+    const effectiveMode: LearnMode =
+      aiMode && isLearnMode(aiMode) && !modeChoice.locked ? aiMode : turnMode;
+    if (aiMode && isLearnMode(aiMode)) {
+      patchConversation(cid, { ai_mode: aiMode });
+    }
     if (finalText && !res.writableEnded) {
       const { mood, clean: moodClean } = finalMood(finalText);
       finalText = moodClean.trim();
       if (finalText) {
-        addMessage(cid, "assistant", finalText, mood);
+        addMessage(cid, "assistant", finalText, mood, effectiveMode);
         res.write(`\n@@mood:${mood}\n`);
+        res.write(`@@mode:${effectiveMode}\n`);
         for (const [pid, status] of planUpdates) {
           patchPlanItem(pid, { status });
           res.write(`@@plan:${pid}:${status}\n`);
@@ -931,6 +983,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         total_messages: totalMessages,
         messages,
         folder: conv.folder,
+        mode: normalizeMode(conv.mode),
+        effective_mode: effectiveModeFor(cid, conv),
       });
     }
     if (method === "PATCH") {
@@ -938,6 +992,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       patchConversation(cid, {
         title: b.title as string | undefined,
         folder: b.folder as string | undefined,
+        mode: b.mode === undefined ? undefined : normalizeMode(b.mode as string),
       });
       return sendJson(res, 200, { ok: true });
     }

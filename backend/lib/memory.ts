@@ -19,6 +19,7 @@ export function buildSystemPrompt(
   allowWrite = false,
   authoredContext = "",
   planContext = "",
+  modeContext = "",
 ): string {
   const topicLines =
     topics.length > 0
@@ -57,6 +58,7 @@ export function buildSystemPrompt(
       ? `\n=== RENCANA BELAJAR TERSTRUKTUR (sumber kebenaran urutan & fase) ===\n${planContext}\n`
       : "",
     authoredSection,
+    modeContext ? `\n${modeContext}\n` : "",
     workspaceContext ? `\n${workspaceContext}\n` : "",
     "=== ATURAN MENTOR ===",
     "1. Kamu adalah mentor yang SAMA di setiap sesi. Ingat betul progress dan catatan di atas, dan lanjutkan dari titik terakhir pelajar.",

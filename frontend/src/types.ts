@@ -20,10 +20,14 @@ export interface Profile {
   updated_at: string;
 }
 
+export type LearnMode = "auto" | "konsep" | "latihan" | "proyek" | "uji" | "ingat";
+
 export interface Conversation {
   id: number;
   title: string;
   folder: string;
+  mode: LearnMode;
+  ai_mode: string;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -36,6 +40,7 @@ export interface Message {
   content: string;
   created_at: string;
   mood?: string;
+  mode?: string;
 }
 
 export type Mood =

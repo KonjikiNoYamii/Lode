@@ -29,6 +29,8 @@ export interface Conversation {
   id: number;
   title: string;
   folder: string;
+  mode: string;
+  ai_mode: string;
   ai_thread: string;
   ai_session: string;
   created_at: string;
@@ -42,6 +44,7 @@ export interface Message {
   role: Role;
   content: string;
   mood: string;
+  mode: string;
   created_at: string;
 }
 
@@ -226,6 +229,9 @@ ensureColumn(
 db.exec("CREATE INDEX IF NOT EXISTS idx_memories_conv ON memories(conversation_id)");
 
 ensureColumn("conversations", "folder", "folder TEXT NOT NULL DEFAULT ''");
+ensureColumn("conversations", "mode", "mode TEXT NOT NULL DEFAULT 'auto'");
+ensureColumn("conversations", "ai_mode", "ai_mode TEXT NOT NULL DEFAULT ''");
+ensureColumn("messages", "mode", "mode TEXT NOT NULL DEFAULT ''");
 ensureColumn(
   "conversations",
   "ai_thread",
@@ -353,9 +359,16 @@ export function getConversation(id: number): Conversation | null {
 
 export function patchConversation(
   id: number,
-  patch: { title?: string; folder?: string; ai_thread?: string; ai_session?: string },
+  patch: {
+    title?: string;
+    folder?: string;
+    mode?: string;
+    ai_mode?: string;
+    ai_thread?: string;
+    ai_session?: string;
+  },
 ): void {
-  const keys = ["title", "folder", "ai_thread", "ai_session"].filter(
+  const keys = ["title", "folder", "mode", "ai_mode", "ai_thread", "ai_session"].filter(
     (k) => patch[k as keyof typeof patch] !== undefined,
   );
   if (keys.length === 0) return;
@@ -469,10 +482,11 @@ export function addMessage(
   role: Role,
   content: string,
   mood = "",
+  mode = "",
 ): void {
   db.prepare(
-    "INSERT INTO messages (conversation_id, role, content, mood) VALUES (?, ?, ?, ?)",
-  ).run(conversationId, role, content, mood);
+    "INSERT INTO messages (conversation_id, role, content, mood, mode) VALUES (?, ?, ?, ?, ?)",
+  ).run(conversationId, role, content, mood, mode);
   touchConversation(conversationId);
 }
 
