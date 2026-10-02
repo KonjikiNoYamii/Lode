@@ -15,8 +15,4 @@ export const MODE_META: Record<LearnMode, { label: string; hint: string }> = {
     hint: "Mengerjakan file asli di folder workspace",
   },
   uji: { label: "Uji", hint: "Soal penilaian tanpa banyak bantuan" },
-  ingat: {
-    label: "Ingat",
-    hint: "Review kilat konsep yang sudah pernah dipelajari",
-  },
 };

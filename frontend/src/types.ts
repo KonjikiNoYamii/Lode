@@ -20,7 +20,7 @@ export interface Profile {
   updated_at: string;
 }
 
-export type LearnMode = "auto" | "konsep" | "latihan" | "proyek" | "uji" | "ingat";
+export type LearnMode = "auto" | "konsep" | "latihan" | "proyek" | "uji";
 
 export interface Conversation {
   id: number;
@@ -84,26 +84,6 @@ export interface Memory {
   type: string;
   content: string;
   created_at: string;
-}
-
-export type CardRating = "lupa" | "nyaris" | "ingat";
-
-/** Jumlah kotak Leitner. Cerminan backend/lib/db.ts MAX_CARD_BOX. */
-export const MAX_CARD_BOX = 5;
-
-export interface ReviewCard {
-  id: number;
-  conversation_id: number;
-  topic_id: number;
-  front: string;
-  back: string;
-  box: number;
-  due_at: string;
-  reviews: number;
-  lapses: number;
-  last_rating: string;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface State {

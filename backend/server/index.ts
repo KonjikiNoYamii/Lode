@@ -6,21 +6,16 @@ import path from "node:path";
 import {
   addMemory,
   addMessage,
-  countDueCards,
   countMessages,
   createConversation,
   createPlanItem,
-  createReviewCard,
   deleteConversation,
   deleteMemory,
   deletePlanItem,
-  deleteReviewCard,
   deleteTopic,
   getConversation,
   getFileRevision,
   getProfile,
-  getReviewCard,
-  getReviewCardForConversation,
   getTopic,
   listConversations,
   listFileRevisions,
@@ -28,7 +23,6 @@ import {
   listMemoriesByConversation,
   listMessages,
   listPlanItems,
-  listReviewCards,
   listTopics,
   listTopicsByConversation,
   listWorkspaceFiles,
@@ -36,7 +30,6 @@ import {
   patchConversation,
   patchPlanItem,
   recordFileRevision,
-  patchReviewCard,
   patchTopic,
   runMaintenance,
   updateProfile,
@@ -60,16 +53,8 @@ import {
   stripModeMarkers,
   type LearnMode,
 } from "../lib/mode";
-import { MASTERY_REVIEW_GAIN, type FileRevision, type PlanStatus } from "../lib/db";
+import { type FileRevision, type PlanStatus } from "../lib/db";
 import { diffLines } from "../lib/diff";
-import {
-  buildReviewContext,
-  dueCards,
-  isCardRating,
-  scheduleReview,
-  stripCardMarkers,
-  type CardRating,
-} from "../lib/srs";
 import {
   buildMemoryUpdatePrompt,
   buildSystemPrompt,
@@ -295,7 +280,6 @@ function stripMarkers(
   text: string,
   planSink?: Map<number, PlanStatus>,
   modeSink?: Map<LearnMode, LearnMode>,
-  cardSink?: Map<number, CardRating>,
 ): string {
   const base = stripModeMarkers(
     text
@@ -303,7 +287,7 @@ function stripMarkers(
       .replace(/@@mood\("[^"]*"\)/g, ""),
     modeSink,
   );
-  return stripCardMarkers(stripPlanMarkers(base, planSink), cardSink);
+  return stripPlanMarkers(base, planSink);
 }
 
 function effectiveModeFor(
@@ -316,47 +300,10 @@ function effectiveModeFor(
     mode: normalizeMode(conv.mode),
     aiMode: conv.ai_mode,
     hasFolder: Boolean(conv.folder),
-    dueCards: countDueCards(conversationId),
     stuckCount: topics.filter((t) => t.status === "stuck").length,
     mastery: topics.reduce((max, t) => Math.max(max, t.mastery), 0),
   });
   return choice.mode === "auto" ? "konsep" : choice.mode;
-}
-
-/**
- * Terapkan penilaian kartu (dari marker AI atau klik pelajar di UI).
- * Kartu "ingat" juga menambah mastery topik induknya — review adalah bukti.
- */
-function applyCardRatings(
-  conversationId: number,
-  sink: Map<number, CardRating>,
-): { id: number; rating: CardRating; box: number; due_at: string }[] {
-  const applied: { id: number; rating: CardRating; box: number; due_at: string }[] = [];
-  for (const [id, rating] of sink) {
-    const card = getReviewCardForConversation(id, conversationId);
-    if (!card) continue;
-    const schedule = scheduleReview(card.box, rating, card.lapses);
-    patchReviewCard(id, {
-      box: schedule.box,
-      dueAt: schedule.dueAt,
-      lapses: schedule.lapses,
-      rating,
-    });
-    if (card.topic_id && rating === "ingat") {
-      const topic = getTopic(card.topic_id);
-      if (topic && topic.conversation_id === conversationId) {
-        writeTopic(
-          topic.name,
-          topic.status,
-          topic.notes,
-          conversationId,
-          { mastery: topic.mastery + MASTERY_REVIEW_GAIN },
-        );
-      }
-    }
-    applied.push({ id, rating, box: schedule.box, due_at: schedule.dueAt });
-  }
-  return applied;
 }
 
 /**
@@ -516,12 +463,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       mode: normalizeMode(conv?.mode),
       aiMode: conv?.ai_mode ?? "",
       hasFolder: Boolean(folder),
-      dueCards: countDueCards(cid),
       stuckCount: topics.filter((t) => t.status === "stuck").length,
       mastery: topics.reduce((max, t) => Math.max(max, t.mastery), 0),
     });
     const turnMode: LearnMode = modeChoice.mode === "auto" ? "konsep" : modeChoice.mode;
-    const reviewCards = dueCards(listReviewCards(cid));
 
     const wsMaxDepth = clampInt(profile.ws_max_depth, 1, 12, 7);
     const wsMaxFiles = clampInt(profile.ws_max_files, 10, 3000, 350);
@@ -565,17 +510,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       allowWrite,
       authoredCtx,
       buildPlanContext(planItems),
-      buildModeContext(
-        turnMode,
-        modeChoice.reason,
-        modeChoice.locked,
-        buildReviewContext(reviewCards),
-      ),
+      buildModeContext(turnMode, modeChoice.reason, modeChoice.locked),
     );
 
     const planSink = new Map<number, PlanStatus>();
     const modeSink = new Map<LearnMode, LearnMode>();
-    const cardSink = new Map<number, CardRating>();
 
     const round1Payload = (): ChatItem[] => {
       const items: ChatItem[] = [{ role: "system", content: system }];
@@ -664,7 +603,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           const re = /@@read\("([^"]+)"\)/g;
           while ((m = re.exec(txt))) markers.add(m[1]);
         };
-        const stripMarkersAndTokens = (txt: string) => stripMarkers(txt, planSink, modeSink, cardSink);
+        const stripMarkersAndTokens = (txt: string) => stripMarkers(txt, planSink, modeSink);
         const run = async () => {
           try {
             const flt = makeWriteFilter();
@@ -766,10 +705,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     if (round1.mode === "collect" && round1.markers.size === 0 && round1.full.trim()) {
       // jawaban pendek tanpa marker — belum sempat di-stream
-      if (!res.writableEnded) res.write(stripMarkers(parsed.clean, planSink, modeSink, cardSink));
+      if (!res.writableEnded) res.write(stripMarkers(parsed.clean, planSink, modeSink));
     }
 
-    let finalText = stripMarkers(parsed.clean, planSink, modeSink, cardSink).trim();
+    let finalText = stripMarkers(parsed.clean, planSink, modeSink).trim();
 
     if (round1.markers.size > 0) {
       const rels = [...round1.markers];
@@ -790,7 +729,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink, cardSink)));
+          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink)));
         });
         if (r2.thread) r1thread = r2.thread;
         if (!res.writableEnded) res.write(r2f.end());
@@ -806,9 +745,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
             (fail.length
               ? `\n[GAGAL: ${fail.map((r) => `${r.rel} (${r.error})`).join("; ")}]`
               : "");
-          finalText = `${stripMarkers(r2Parsed.clean, planSink, modeSink, cardSink)}${note}`.trim() || finalText;
+          finalText = `${stripMarkers(r2Parsed.clean, planSink, modeSink)}${note}`.trim() || finalText;
         } else {
-          finalText = stripMarkers(r2Parsed.clean, planSink, modeSink, cardSink).trim() || finalText;
+          finalText = stripMarkers(r2Parsed.clean, planSink, modeSink).trim() || finalText;
         }
         if (r2.streamError) providerError = r2.streamError;
       } catch (err) {
@@ -849,7 +788,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         );
         const r2f = makeWriteFilter();
         const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink, cardSink)));
+          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink)));
         });
         if (r2.thread) r1thread = r2.thread;
         if (!res.writableEnded) res.write(r2f.end());
@@ -888,7 +827,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     const planUpdates = [...planSink.entries()].filter(([pid]) => planIds.has(pid));
-    const cardUpdates = applyCardRatings(cid, cardSink);
     const aiMode = [...modeSink.values()].pop() ?? "";
     const effectiveMode: LearnMode =
       aiMode && isLearnMode(aiMode) && !modeChoice.locked ? aiMode : turnMode;
@@ -905,9 +843,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         for (const [pid, status] of planUpdates) {
           patchPlanItem(pid, { status });
           res.write(`@@plan:${pid}:${status}\n`);
-        }
-        for (const card of cardUpdates) {
-          res.write(`@@card:${card.id}:${card.rating}:${card.box}:${card.due_at}\n`);
         }
         if (fileWrites > 0) {
           res.write(`@@files:${fileWrites}\n`);
@@ -1067,14 +1002,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!getConversation(cid)) {
       return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
     }
-    const cards = listReviewCards(cid);
     return sendJson(res, 200, {
       conversation_id: cid,
       topics: listTopicsByConversation(cid),
       memories: listMemoriesByConversation(cid),
       plan: listPlanItems(cid),
-      cards,
-      due_cards: dueCards(cards).length,
       revisions: listFileRevisions(cid, 20).map(summarizeRevision),
     });
   }
@@ -1305,64 +1237,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
-  // ---------- kartu review (spaced repetition) ----------
-  if (method === "GET" && p === "/api/cards") {
-    const cid = Number(url.searchParams.get("conversationId")) || 0;
-    const cards = listReviewCards(cid);
-    return sendJson(res, 200, {
-      cards,
-      due: dueCards(cards).length,
-    });
-  }
-  if (method === "POST" && p === "/api/cards") {
-    const b = await readJson(req);
-    const cid = Number(b.conversationId) || 0;
-    if (!cid || !getConversation(cid)) {
-      return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
-    }
-    const id = createReviewCard(cid, {
-      front: String(b.front ?? ""),
-      back: String(b.back ?? ""),
-    });
-    if (!id) {
-      return sendJson(res, 400, { error: "Pertanyaan kartu wajib diisi" });
-    }
-    return sendJson(res, 200, { cards: listReviewCards(cid) });
-  }
-  const cardMatch = p.match(/^\/api\/cards\/(\d+)$/);
-  if (cardMatch) {
-    const id = Number(cardMatch[1]);
-    const card = getReviewCard(id);
-    if (!card) {
-      return sendJson(res, 404, { error: "Kartu tidak ditemukan" });
-    }
-    if (method === "PATCH") {
-      const b = await readJson(req);
-      if (b.rating !== undefined) {
-        if (!isCardRating(b.rating)) {
-          return sendJson(res, 400, { error: "Nilai harus lupa, nyaris, atau ingat" });
-        }
-        const applied = applyCardRatings(
-          card.conversation_id,
-          new Map([[id, b.rating as CardRating]]),
-        );
-        return sendJson(res, 200, {
-          cards: listReviewCards(card.conversation_id),
-          applied,
-        });
-      }
-      patchReviewCard(id, {
-        front: b.front as string | undefined,
-        back: b.back as string | undefined,
-      });
-      return sendJson(res, 200, { cards: listReviewCards(card.conversation_id) });
-    }
-    if (method === "DELETE") {
-      deleteReviewCard(id);
-      return sendJson(res, 200, { cards: listReviewCards(card.conversation_id) });
-    }
-  }
-
   // ---------- memories ----------
   if (p === "/api/memories") {
     if (method === "GET") return sendJson(res, 200, { memories: listMemories() });
@@ -1459,15 +1333,9 @@ server.listen(PORT, HOST, () => {
   console.log(`[lode] AI endpoint: ${getProfile().ai_base_url}/chat/completions`);
   try {
     const r = runMaintenance();
-    const freed = r.freedMessages + r.freedTopics + r.freedCards;
-    if (r.promotedCards > 0) {
+    if (r.freedMessages || r.freedTopics) {
       console.log(
-        `[lode] kartu review: ${r.promotedCards} kartu topik yang sudah dikuasai dimajukan satu kotak`,
-      );
-    }
-    if (freed) {
-      console.log(
-        `[lode] pembersihan: ${r.freedMessages} pesan, ${r.freedTopics} topik & ${r.freedCards} kartu yatim dihapus (${r.sizeBefore}B -> ${r.sizeAfter}B)`,
+        `[lode] pembersihan: ${r.freedMessages} pesan & ${r.freedTopics} topik yatim dihapus (${r.sizeBefore}B -> ${r.sizeAfter}B)`,
       );
     } else {
       console.log(`[lode] pembersihan: tidak ada data yatim`);

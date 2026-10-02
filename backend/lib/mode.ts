@@ -1,6 +1,4 @@
-import { CARD_RATING_RULES, REVIEW_ONLY_RULES } from "./srs";
-
-export type LearnMode = "auto" | "konsep" | "latihan" | "proyek" | "uji" | "ingat";
+export type LearnMode = "auto" | "konsep" | "latihan" | "proyek" | "uji";
 
 export const LEARN_MODES: LearnMode[] = [
   "auto",
@@ -8,7 +6,6 @@ export const LEARN_MODES: LearnMode[] = [
   "latihan",
   "proyek",
   "uji",
-  "ingat",
 ];
 
 export const MODE_META: Record<LearnMode, { label: string; hint: string }> = {
@@ -32,34 +29,20 @@ export const MODE_META: Record<LearnMode, { label: string; hint: string }> = {
     label: "Uji",
     hint: "Soal penilaian tanpa banyak bantuan",
   },
-  ingat: {
-    label: "Ingat",
-    hint: "Review kilat konsep yang sudah pernah dipelajari",
-  },
 };
 
-const CONCRETE_MODES: LearnMode[] = ["konsep", "latihan", "proyek", "uji", "ingat"];
+const CONCRETE_MODES: LearnMode[] = ["konsep", "latihan", "proyek", "uji"];
 
-/**
- * Niat eksplisit pelajar. Selalu menang atas apa pun, termasuk kartu jatuh tempo.
- */
-const STRONG_INTENT: { mode: LearnMode; re: RegExp }[] = [
+/** Niat pelajar dari kata kunci di pesan. */
+const MODE_INTENT: { mode: LearnMode; re: RegExp }[] = [
   {
     mode: "uji",
     re: /\b(uji|ujian|quiz|kuis|exam|assessment|beri soal-soal|soal-soal)\b/i,
   },
   {
-    mode: "ingat",
+    mode: "uji",
     re: /\b(ingat|review|ulang|recall|flashcard|kart(u|o)\s?ingatan|spaced)\b/i,
   },
-];
-
-/**
- * Niat longgar dari kata umum ("file", "kode", "paham", ...). Sengaja kalah oleh
- * kartu jatuh tempo: kalau tidak, hampir semua pesan menembak ke mode lain dan
- * daftar kartu tidak pernah sampai ke prompt — kartu jadi selamanya kotak 1.
- */
-const WEAK_INTENT: { mode: LearnMode; re: RegExp }[] = [
   {
     mode: "proyek",
     re: /\b(proyek|project|bikin|buat|implement|refactor|file|berkas|folder|repo|kode|script|program)\b/i,
@@ -74,12 +57,8 @@ const WEAK_INTENT: { mode: LearnMode; re: RegExp }[] = [
   },
 ];
 
-function matchIntent(
-  list: { mode: LearnMode; re: RegExp }[],
-  message: string,
-  hasFolder: boolean,
-): LearnMode | null {
-  for (const { mode, re } of list) {
+function matchIntent(message: string, hasFolder: boolean): LearnMode | null {
+  for (const { mode, re } of MODE_INTENT) {
     if (!re.test(message)) continue;
     if (mode === "proyek" && !hasFolder) continue;
     return mode;
@@ -92,7 +71,6 @@ export interface ModeChoiceInput {
   mode: string;
   aiMode: string;
   hasFolder: boolean;
-  dueCards: number;
   stuckCount: number;
   mastery: number;
 }
@@ -121,26 +99,15 @@ export function chooseMode(input: ModeChoiceInput): ModeChoice {
     return { mode: locked, locked: true, reason: "dikunci manual" };
   }
 
-  const strong = matchIntent(STRONG_INTENT, input.message, input.hasFolder);
-  if (strong) {
-    return { mode: strong, locked: false, reason: "kunci kata di pesan" };
-  }
-
-  if (input.dueCards > 0) {
-    return { mode: "ingat", locked: false, reason: `${input.dueCards} kartu review jatuh tempo` };
-  }
-
-  const weak = matchIntent(WEAK_INTENT, input.message, input.hasFolder);
-  if (weak) {
-    return { mode: weak, locked: false, reason: "kunci kata di pesan" };
+  const keyed = matchIntent(input.message, input.hasFolder);
+  if (keyed) {
+    return { mode: keyed, locked: false, reason: "kunci kata di pesan" };
   }
 
   if (input.stuckCount > 0) {
     return { mode: "konsep", locked: false, reason: "ada topik yang buntu" };
   }
-  // Jangan lanjut di mode "ingat" kalau tidak ada kartu yang bisa diuji —
-  // kalau tidak, AI nyangkut di mode review tanpa kartu dan ikut mengarang materi.
-  if (input.aiMode && isLearnMode(input.aiMode) && input.aiMode !== "ingat") {
+  if (input.aiMode && isLearnMode(input.aiMode)) {
     return { mode: input.aiMode, locked: false, reason: "lanjutan mode sebelumnya" };
   }
   if (input.mastery >= 60) {
@@ -162,30 +129,20 @@ const MODE_INSTRUCTIONS: Record<Exclude<LearnMode, "auto">, string[]> = {
   uji: [
     "MODE UJI — simulasi penilaian. Beri soal tanpa spoiler jawaban dan tanpa petunjuk awal. Tunggu jawaban pelajar, lalu nilai JUJUR: kata mana yang tepat, mana yang salah, dan beri koreksi. Jangan menoleransi jawaban setengah benar sebagai benar.",
   ],
-  ingat: [
-    "MODE INGAT — review kilat. Satu konsep per giliran: tanya kartu, tunggu jawaban pelajar, koreksi singkat, lalu lanjut. Hanya bahas konsep yang sudah pernah dipelajari; jangan menambah materi baru.",
-  ],
 };
 
 export function buildModeContext(
   mode: LearnMode,
   reason: string,
   locked: boolean,
-  review = "",
 ): string {
   if (mode === "auto") return "";
   const instructions = MODE_INSTRUCTIONS[mode];
-  // Penilaian kartu ikut di mode apa pun selama masih ada kartu jatuh tempo:
-  // Lode menilai penguasaan pelajar sambil mengajar, bukan cuma saat diminta review.
-  const rating = review
-    ? [...(mode === "ingat" ? REVIEW_ONLY_RULES : []), ...CARD_RATING_RULES, review]
-    : [];
   return [
     `=== MODE BELAJAR SEKARANG: ${MODE_META[mode].label.toUpperCase()} ===`,
     `Alasan: ${reason}. ${locked ? "Mode ini dikunci oleh pelajar, jadi PATUHI dan jangan berganti." : "Mode ini dipilih otomatis oleh sistem."}`,
     ...instructions,
-    ...rating,
-    `Boleh pindah mode kalau alasannya jelas: tulis marker @@mode("konsep"|"latihan"|"proyek"|"uji"|"ingat") di baris PALING AKHIR jawabanmu. Marker itu disembunyikan dari tampilan.`,
+    `Boleh pindah mode kalau alasannya jelas: tulis marker @@mode("konsep"|"latihan"|"proyek"|"uji") di baris PALING AKHIR jawabanmu. Marker itu disembunyikan dari tampilan.`,
   ].join("\n");
 }
 

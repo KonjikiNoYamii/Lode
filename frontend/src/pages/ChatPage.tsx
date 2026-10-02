@@ -10,7 +10,6 @@ import type {
   Memory,
   PlanItem,
   Profile,
-  ReviewCard,
   Topic,
 } from "@/types";
 
@@ -45,7 +44,6 @@ export default function ChatPage() {
   const [progressTopics, setProgressTopics] = useState<Topic[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [plan, setPlan] = useState<PlanItem[]>([]);
-  const [cards, setCards] = useState<ReviewCard[]>([]);
   const [revisions, setRevisions] = useState<FileRevision[]>([]);
   const [mode, setMode] = useState<LearnMode>("auto");
   const [effectiveMode, setEffectiveMode] = useState<LearnMode>("konsep");
@@ -68,26 +66,22 @@ export default function ChatPage() {
           topics: Topic[];
           memories: Memory[];
           plan?: PlanItem[];
-          cards?: ReviewCard[];
           revisions?: FileRevision[];
         }>(`/api/conversations/${id}/progress`);
         setProgressTopics(r.topics);
         setMemories(r.memories);
         setPlan(r.plan ?? []);
-        setCards(r.cards ?? []);
         setRevisions(r.revisions ?? []);
       } catch {
         setProgressTopics([]);
         setMemories([]);
         setPlan([]);
-        setCards([]);
         setRevisions([]);
       }
     } else {
       setProgressTopics([]);
       setMemories([]);
       setPlan([]);
-      setCards([]);
       setRevisions([]);
     }
   }, []);
@@ -245,8 +239,6 @@ export default function ChatPage() {
         topics={progressTopics}
         memories={memories}
         plan={plan}
-        cards={cards}
-        onCardsUpdated={setCards}
         revisions={revisions}
         hasFolder={Boolean(currentFolder)}
         onRevisionsUpdated={() => void refresh(currentId)}

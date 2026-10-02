@@ -6,7 +6,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { get as apiGet, send as apiSend } from "@/api";
+import { send as apiSend } from "@/api";
 import type {
   LearnMode,
   Memory,
@@ -16,14 +16,12 @@ import type {
   PlanItem,
   PlanStatus,
   Profile,
-  ReviewCard,
   Topic,
   TopicStatus,
 } from "@/types";
 import { GraduationCap, BookOpen } from "lucide-react";
 import { Markdown } from "./Markdown";
 import PlanPanel from "./PlanPanel";
-import ReviewPanel from "./ReviewPanel";
 import FileHistoryPanel from "./FileHistoryPanel";
 import { MODE_META } from "./mode";
 import MentorAvatar, {
@@ -35,7 +33,7 @@ import { STATUS_META, masteryTone } from "./status";
 
 const STATUS_ORDER: TopicStatus[] = ["mastered", "learning", "stuck", "todo"];
 const PLAN_STATUSES: PlanStatus[] = ["todo", "learning", "done", "stuck"];
-const MODES: LearnMode[] = ["auto", "konsep", "latihan", "proyek", "uji", "ingat"];
+const MODES: LearnMode[] = ["auto", "konsep", "latihan", "proyek", "uji"];
 
 function FilterChip({
   active,
@@ -72,7 +70,6 @@ function stripStreamMood(s: string): string {
   return s
     .replace(/\n?@@mood:[a-z]+\s*/g, "")
     .replace(/\n?@@plan:\d+:[a-z]+\s*/g, "")
-    .replace(/\n?@@card:\d+:[a-z]+\s*/g, "")
     .replace(/\n?@@files:\d+\s*/g, "")
     .replace(/\n?@@mode:[a-z]+\s*/g, "");
 }
@@ -133,8 +130,6 @@ interface Props {
   topics?: Topic[];
   memories?: Memory[];
   plan?: PlanItem[];
-  cards?: ReviewCard[];
-  onCardsUpdated: (cards: ReviewCard[]) => void;
   revisions?: FileRevision[];
   hasFolder?: boolean;
   onRevisionsUpdated: () => void;
@@ -240,8 +235,6 @@ export default function ChatRoom({
   topics = [],
   memories = [],
   plan = [],
-  cards = [],
-  onCardsUpdated,
   revisions = [],
   hasFolder = false,
   onRevisionsUpdated,
@@ -532,19 +525,6 @@ export default function ChatRoom({
       }
 
       if (acc.match(/@@files:\d+/)) onRevisionsUpdated();
-
-// Server sudah menerapkan rating-nya; di sini cukup tarik ulang state
-      // supaya kartu tidak dihitung dua kali.
-      if (acc.match(/@@card:\d+:[a-z]+/)) {
-        const convId = currentIdRef.current;
-        if (convId) {
-          void apiGet<{ cards: ReviewCard[] }>(
-            `/api/cards?conversationId=${convId}`,
-          )
-            .then((r) => onCardsUpdated(r.cards ?? []))
-            .catch(() => undefined);
-        }
-      }
 
       if (result.error) setError(result.error);
       if (result.text && !result.error) {
@@ -856,12 +836,6 @@ export default function ChatRoom({
             conversationId={currentId}
             plan={plan}
             onPlanUpdated={onPlanUpdated}
-          />
-
-          <ReviewPanel
-            conversationId={currentId}
-            cards={cards}
-            onCardsUpdated={onCardsUpdated}
           />
 
           <FileHistoryPanel

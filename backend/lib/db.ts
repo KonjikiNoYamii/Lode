@@ -83,21 +83,6 @@ export interface Memory {
   created_at: string;
 }
 
-export interface ReviewCard {
-  id: number;
-  conversation_id: number;
-  topic_id: number;
-  front: string;
-  back: string;
-  box: number;
-  due_at: string;
-  reviews: number;
-  lapses: number;
-  last_rating: string;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface FileRevision {
   id: number;
   conversation_id: number;
@@ -191,28 +176,6 @@ CREATE TABLE IF NOT EXISTS plan_items (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_plan_conv ON plan_items(conversation_id, phase, order_index);
-
-CREATE TABLE IF NOT EXISTS review_cards (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  conversation_id INTEGER NOT NULL DEFAULT 0,
-  topic_id INTEGER NOT NULL DEFAULT 0,
-  front TEXT NOT NULL,
-  back TEXT NOT NULL DEFAULT '',
-  box INTEGER NOT NULL DEFAULT 1,
-  due_at TEXT NOT NULL DEFAULT (datetime('now')),
-  reviews INTEGER NOT NULL DEFAULT 0,
-  lapses INTEGER NOT NULL DEFAULT 0,
-  last_rating TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_cards_conv_due ON review_cards(conversation_id, due_at);
-CREATE INDEX IF NOT EXISTS idx_cards_topic ON review_cards(topic_id);
-
-CREATE TABLE IF NOT EXISTS app_flags (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL DEFAULT ''
-);
 
 CREATE TABLE IF NOT EXISTS file_revisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -312,6 +275,18 @@ ensureColumn("topics", "mastery", "mastery INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "confidence", "confidence INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "evidence", "evidence TEXT NOT NULL DEFAULT ''");
 ensureColumn("topics", "last_reviewed_at", "last_reviewed_at TEXT NOT NULL DEFAULT ''");
+
+// Fitur kartu review (spaced repetition) sudah dihapus. Buang sisa datanya
+// supaya tidak ada tabel yatim yang masih ikut ditulis atau di-backup.
+function dropLegacyReviewCards(): void {
+  db.exec("DROP TABLE IF EXISTS review_cards");
+  db.exec("DROP TABLE IF EXISTS app_flags");
+  // Mode "ingat" ikut dihapus; kembalikan percakapan lama ke mode otomatis.
+  db.prepare("UPDATE conversations SET ai_mode = '' WHERE ai_mode = 'ingat'").run();
+  db.prepare("UPDATE messages SET mode = '' WHERE mode = 'ingat'").run();
+}
+
+dropLegacyReviewCards();
 ensureColumn("profile", "ws_max_depth", "ws_max_depth INTEGER NOT NULL DEFAULT 7");
 ensureColumn("profile", "ws_max_files", "ws_max_files INTEGER NOT NULL DEFAULT 350");
 ensureColumn("profile", "ws_auto_kb", "ws_auto_kb INTEGER NOT NULL DEFAULT 0");
@@ -449,7 +424,6 @@ export function deleteConversation(id: number): void {
   db.prepare("DELETE FROM memories WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM workspace_files WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM plan_items WHERE conversation_id = ?").run(id);
-  db.prepare("DELETE FROM review_cards WHERE conversation_id = ?").run(id);
   db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
   walCheckpoint();
 }
@@ -459,8 +433,6 @@ export interface MaintenanceResult {
   freedTopics: number;
   freedMemories: number;
   freedPlan: number;
-  freedCards: number;
-  promotedCards: number;
   sizeBefore: number;
   sizeAfter: number;
   walBefore: number;
@@ -477,39 +449,6 @@ function walCheckpoint(): void {
   } catch {
     // checkpoint gagal — tidak fatal
   }
-}
-
-const FLAG_CARDS_PROMOTED = "cards_promoted_for_mastered";
-
-/**
- * Backfill sekali jalan. Topik yang sudah `mastered` sebelum aturan "naikkan
- * kotak saat transisi" ada tidak akan pernah punya transisi lagi, jadi
- * kartunya akan menggantung selamanya di kotak 1. Majukan satu kali saja.
- *
- * Hanya kartu yang masih kotak 1 dan belum pernah dinilai — supaya topik yang
- * kebetulan sudah dipromot oleh aturan transisi tidak jadi naik dua kali.
- */
-function promoteCardsForMasteredTopics(): number {
-  if (db.prepare("SELECT 1 FROM app_flags WHERE key = ?").get(FLAG_CARDS_PROMOTED)) {
-    return 0;
-  }
-  const promoted = Number(
-    db
-      .prepare(
-        `UPDATE review_cards
-            SET box = box + 1, updated_at = datetime('now')
-          WHERE box = 1 AND reviews = 0
-            AND topic_id IN (
-              SELECT id FROM topics
-               WHERE status = 'mastered' AND TRIM(evidence) <> '' AND mastery >= ?
-            )`,
-      )
-      .run(MASTERY_MASTERED_MIN).changes,
-  );
-  db.prepare("INSERT OR REPLACE INTO app_flags (key, value) VALUES (?, datetime('now'))").run(
-    FLAG_CARDS_PROMOTED,
-  );
-  return promoted;
 }
 
 export function runMaintenance(): MaintenanceResult {
@@ -563,22 +502,12 @@ export function runMaintenance(): MaintenanceResult {
       .run().changes,
   );
 
-  const freedCards = Number(
-    db
-      .prepare(
-        "DELETE FROM review_cards WHERE conversation_id NOT IN (SELECT id FROM conversations)",
-      )
-      .run().changes,
-  );
-
-  const promotedCards = promoteCardsForMasteredTopics();
-
   db.prepare("PRAGMA optimize").all();
   walCheckpoint();
 
   const sizeAfter = readBytes(mainPath) + readBytes(walPath) + readBytes(shmPath);
   const walAfter = readBytes(walPath);
-  return { freedMessages, freedTopics, freedMemories, freedPlan, freedCards, promotedCards, sizeBefore, sizeAfter, walBefore, walAfter };
+  return { freedMessages, freedTopics, freedMemories, freedPlan, sizeBefore, sizeAfter, walBefore, walAfter };
 }
 
 function touchConversation(id: number): void {
@@ -670,7 +599,6 @@ const TOPIC_STATUSES = new Set(["mastered", "learning", "stuck", "todo"]);
 
 export const MASTERY_MASTERED_MIN = 60;
 export const MASTERY_MAX_GAIN_PER_TURN = 20;
-export const MASTERY_REVIEW_GAIN = 10;
 
 export function getTopic(id: number): Topic | undefined {
   return db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic | undefined;
@@ -692,36 +620,6 @@ export interface TopicWriteResult {
   status: string;
   mastery: number;
   downgraded: boolean;
-}
-
-/**
- * Topik yang benar-benar dipelajari (ada bukti) otomatis punya kartu review,
- * supaya materi yang sudah lewat tidak hilang dari ingatan.
- */
-function syncCardForTopic(
-  topicId: number,
-  conversationId: number,
-  name: string,
-  evidence: string,
-  notes: string,
-): void {
-  if (!topicId || !conversationId || !evidence) return;
-  ensureCardForTopic(topicId, conversationId, name, evidence || notes);
-}
-
-/**
- * Topik resmi jadi "dikuasai" backed bukti = bukti recall juga, jadi majukan
- * kotak kartunya satu langkah. Cuma saat TRANSISI ke mastered, kalau tidak
- * pencatat yang sama akan menaikkan kotak tiap giliran sampai maks.
- */
-function promoteCardOnMastered(topicId: number, conversationId: number): void {
-  const card = db
-    .prepare(
-      "SELECT id, box FROM review_cards WHERE topic_id = ? AND conversation_id = ?",
-    )
-    .get(topicId, conversationId) as { id: number; box: number } | undefined;
-  if (!card || card.box >= MAX_CARD_BOX) return;
-  patchReviewCard(card.id, { box: card.box + 1 });
 }
 
 function enforceEvidenceRules(  status: string,
@@ -763,13 +661,12 @@ export function writeTopic(
   const requested = TOPIC_STATUSES.has(status) ? status : "learning";
   const existing = db
     .prepare(
-      `SELECT id, status, mastery, confidence, evidence, last_reviewed_at FROM topics
+      `SELECT id, mastery, confidence, evidence, last_reviewed_at FROM topics
        WHERE name = ? COLLATE NOCASE AND conversation_id = ?`,
     )
     .get(cleanName, conversationId) as
     | {
         id: number;
-        status: string;
         mastery: number;
         confidence: number;
         evidence: string;
@@ -806,10 +703,6 @@ export function writeTopic(
       evidence,
       existing.id,
     );
-    syncCardForTopic(existing.id, conversationId, cleanName, evidence, notes);
-    if (existing.status !== "mastered" && ruled.status === "mastered") {
-      promoteCardOnMastered(existing.id, conversationId);
-    }
     return { id: existing.id, ...ruled };
   }
 
@@ -829,7 +722,6 @@ export function writeTopic(
       conversationId,
     );
   const newId = Number(result.lastInsertRowid);
-  syncCardForTopic(newId, conversationId, cleanName, evidence, notes);
   return { id: newId, ...ruled };
 }
 
@@ -1098,165 +990,6 @@ export function movePlanItem(
     "UPDATE plan_items SET order_index = ? WHERE id = ?",
   ).run(a, sibling.id);
 }
-// ---------- kartu review (spaced repetition) ----------
-
-export const MAX_CARD_BOX = 5;
-export const FIRST_CARD_DELAY_DAYS = 1;
-
-export function listReviewCards(conversationId: number): ReviewCard[] {
-  return db
-    .prepare(
-      `SELECT * FROM review_cards
-       WHERE conversation_id = ?
-       ORDER BY due_at ASC, id ASC`,
-    )
-    .all(conversationId) as unknown as ReviewCard[];
-}
-
-export function getReviewCard(id: number): ReviewCard | undefined {
-  return db.prepare("SELECT * FROM review_cards WHERE id = ?").get(id) as
-    | ReviewCard
-    | undefined;
-}
-
-/** Kartu milik percakapan ini saja — dipakai untuk memvalidasi marker AI. */
-export function getReviewCardForConversation(
-  id: number,
-  conversationId: number,
-): ReviewCard | undefined {
-  return db
-    .prepare(
-      "SELECT * FROM review_cards WHERE id = ? AND conversation_id = ?",
-    )
-    .get(id, conversationId) as ReviewCard | undefined;
-}
-
-export function countDueCards(conversationId: number): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS c FROM review_cards
-       WHERE conversation_id = ? AND due_at <= datetime('now')`,
-    )
-    .get(conversationId) as { c: number };
-  return Number(row.c) || 0;
-}
-
-export function createReviewCard(
-  conversationId: number,
-  input: { front: string; back?: string; topicId?: number; dueAt?: string; dueInDays?: number },
-): number {
-  const front = input.front.trim().slice(0, 200);
-  if (!front) return 0;
-  const absolute = String(input.dueAt ?? "").trim();
-  const days = Number(input.dueInDays);
-  const dueExpr = absolute
-    ? "?"
-    : Number.isFinite(days)
-      ? "datetime('now', ?)"
-      : "datetime('now', '+1 day')";
-  const dueValue = absolute
-    ? absolute
-    : Number.isFinite(days)
-      ? `+${Math.max(0, Math.trunc(days))} days`
-      : "";
-  const result = db
-    .prepare(
-      `INSERT INTO review_cards (conversation_id, topic_id, front, back, box, due_at)
-       VALUES (?, ?, ?, ?, 1, ${dueExpr})`,
-    )
-    .run(
-      conversationId,
-      Number(input.topicId) || 0,
-      front,
-      String(input.back ?? "").trim().slice(0, 500),
-      dueValue,
-    );
-  return Number(result.lastInsertRowid);
-}
-
-/** Satu kartu per topik: kartu yang ada diperbarui, bukan diduplikasi. */
-export function ensureCardForTopic(
-  topicId: number,
-  conversationId: number,
-  front: string,
-  back: string,
-): number {
-  if (!topicId || !conversationId) return 0;
-  const existing = db
-    .prepare(
-      "SELECT id FROM review_cards WHERE topic_id = ? AND conversation_id = ?",
-    )
-    .get(topicId, conversationId) as { id: number } | undefined;
-  if (existing) {
-    db.prepare(
-      `UPDATE review_cards
-         SET front = ?, back = CASE WHEN ? <> '' THEN ? ELSE back END,
-             updated_at = datetime('now')
-       WHERE id = ?`,
-    ).run(front.slice(0, 200), back, back.slice(0, 500), existing.id);
-    return existing.id;
-  }
-  return createReviewCard(conversationId, {
-    front,
-    back,
-    topicId,
-    dueInDays: FIRST_CARD_DELAY_DAYS,
-  });
-}
-
-export function patchReviewCard(
-  id: number,
-  patch: {
-    front?: string;
-    back?: string;
-    box?: number;
-    dueAt?: string;
-    rating?: string;
-    lapses?: number;
-  },
-): void {
-  const sets: string[] = [];
-  const values: (string | number)[] = [];
-  if (patch.front !== undefined) {
-    const front = patch.front.trim().slice(0, 200);
-    if (!front) return;
-    sets.push("front = ?");
-    values.push(front);
-  }
-  if (patch.back !== undefined) {
-    sets.push("back = ?");
-    values.push(patch.back.trim().slice(0, 500));
-  }
-  if (patch.box !== undefined) {
-    const box = Math.max(1, Math.min(MAX_CARD_BOX, Math.trunc(patch.box) || 1));
-    sets.push("box = ?");
-    values.push(box);
-  }
-  if (patch.dueAt) {
-    sets.push("due_at = ?");
-    values.push(patch.dueAt);
-  }
-  if (patch.rating !== undefined) {
-    sets.push("last_rating = ?");
-    values.push(patch.rating.slice(0, 20));
-    sets.push("reviews = reviews + 1");
-  }
-  if (patch.lapses !== undefined) {
-    sets.push("lapses = ?");
-    values.push(Math.max(0, Math.trunc(patch.lapses) || 0));
-  }
-  if (sets.length === 0) return;
-  sets.push("updated_at = datetime('now')");
-  db.prepare(`UPDATE review_cards SET ${sets.join(", ")} WHERE id = ?`).run(
-    ...values,
-    id,
-  );
-}
-
-export function deleteReviewCard(id: number): void {
-  db.prepare("DELETE FROM review_cards WHERE id = ?").run(id);
-}
-
 // ---------- riwayat file (backup & undo) ----------
 
 const REVISION_KEEP = 200;
