@@ -1,5 +1,7 @@
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -165,6 +167,28 @@ function Composer({
   textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const [text, setText] = useState("");
+  const innerRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const attach = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      innerRef.current = el;
+      textareaRef.current = el;
+    },
+    [textareaRef],
+  );
+
+  // Tanpa auto-resize, teks panjang yang di-paste stay di kotak 1 baris dan
+  // isinya menutupi/terpotong. Tumbuhkan kotak ikut isinya, lalu scroll
+  // di dalam kotak begitu mencapai batas.
+  useLayoutEffect(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const limit = Math.max(160, Math.round(window.innerHeight * 0.4));
+    el.style.height = "auto";
+    const wanted = el.scrollHeight;
+    el.style.height = `${Math.min(wanted, limit)}px`;
+    el.style.overflowY = wanted > limit ? "auto" : "hidden";
+  }, [text]);
 
   const submit = () => {
     const t = text.trim();
@@ -177,7 +201,7 @@ function Composer({
   return (
     <div className="glass flex items-end gap-2 rounded-2xl p-2">
       <textarea
-        ref={textareaRef}
+        ref={attach}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -188,7 +212,7 @@ function Composer({
         }}
         rows={1}
         placeholder="Tanya Lode apa saja… (Shift+Enter = baris baru)"
-        className="max-h-40 min-h-[42px] flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none placeholder:text-mist/70"
+        className="max-h-[40vh] min-h-[42px] flex-1 resize-none overflow-y-auto bg-transparent px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-mist/70"
       />
       <button
         onClick={submit}
