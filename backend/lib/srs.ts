@@ -83,9 +83,10 @@ export function buildReviewContext(cards: ReviewCard[], limit = 5): string {
 
 /** Petunjuk untuk Lode: kartunya yang harus diuji dan cara menilainya. */
 export const REVIEW_INSTRUCTIONS = [
+  "INI MODE REVIEW KARTU. Daftar kartu di bawah adalah SATU-SATU hal yang boleh kamu uji — jangan menambah konsep, materi, atau soal baru, dan jangan mengulang penjelasan dari materi yang ada di daftar itu.",
   "PILIH SATU kartu dari daftar di atas (sebut id-nya), lalu tanya frontsnya saja TANPA memberi jawaban.",
   "Tunggu jawaban pelajar. Di giliran berikutnya nilai jawabannya dengan jujur, koreksi seperlunya.",
-  "Tandai hasil penilaianmu di baris PALING AKHIR dengan marker @@card(<id>,\"lupa\"|\"nyaris\"|\"ingat\").",
+  "WAJIB tutup giliran itu dengan marker @@card(<id>,\"lupa\"|\"nyaris\"|\"ingat\") di baris PALING AKHIR. Tanpa marker ini kartu tidak akan naik dan sistem tidak tahu kamu sudah mengujinya. Pilih \"ingat\" HANYA kalau pelajar benar-benar bisa menjawab sendiri tanpa bantuan.",
   "Setelah memberi nilai, lanjut ke giliran berikutnya dan jangan menambah materi baru.",
 ];
 

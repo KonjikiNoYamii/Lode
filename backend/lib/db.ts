@@ -659,6 +659,21 @@ function syncCardForTopic(
   ensureCardForTopic(topicId, conversationId, name, evidence || notes);
 }
 
+/**
+ * Topik resmi jadi "dikuasai" backed bukti = bukti recall juga, jadi majukan
+ * kotak kartunya satu langkah. Cuma saat TRANSISI ke mastered, kalau tidak
+ * pencatat yang sama akan menaikkan kotak tiap giliran sampai maks.
+ */
+function promoteCardOnMastered(topicId: number, conversationId: number): void {
+  const card = db
+    .prepare(
+      "SELECT id, box FROM review_cards WHERE topic_id = ? AND conversation_id = ?",
+    )
+    .get(topicId, conversationId) as { id: number; box: number } | undefined;
+  if (!card || card.box >= MAX_CARD_BOX) return;
+  patchReviewCard(card.id, { box: card.box + 1 });
+}
+
 function enforceEvidenceRules(  status: string,
   mastery: number,
   evidence: string,
@@ -698,12 +713,13 @@ export function writeTopic(
   const requested = TOPIC_STATUSES.has(status) ? status : "learning";
   const existing = db
     .prepare(
-      `SELECT id, mastery, confidence, evidence, last_reviewed_at FROM topics
+      `SELECT id, status, mastery, confidence, evidence, last_reviewed_at FROM topics
        WHERE name = ? COLLATE NOCASE AND conversation_id = ?`,
     )
     .get(cleanName, conversationId) as
     | {
         id: number;
+        status: string;
         mastery: number;
         confidence: number;
         evidence: string;
@@ -741,6 +757,9 @@ export function writeTopic(
       existing.id,
     );
     syncCardForTopic(existing.id, conversationId, cleanName, evidence, notes);
+    if (existing.status !== "mastered" && ruled.status === "mastered") {
+      promoteCardOnMastered(existing.id, conversationId);
+    }
     return { id: existing.id, ...ruled };
   }
 

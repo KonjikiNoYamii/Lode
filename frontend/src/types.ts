@@ -88,6 +88,9 @@ export interface Memory {
 
 export type CardRating = "lupa" | "nyaris" | "ingat";
 
+/** Jumlah kotak Leitner. Cerminan backend/lib/db.ts MAX_CARD_BOX. */
+export const MAX_CARD_BOX = 5;
+
 export interface ReviewCard {
   id: number;
   conversation_id: number;

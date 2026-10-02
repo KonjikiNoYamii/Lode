@@ -907,7 +907,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           res.write(`@@plan:${pid}:${status}\n`);
         }
         for (const card of cardUpdates) {
-          res.write(`@@card:${card.id}:${card.rating}\n`);
+          res.write(`@@card:${card.id}:${card.rating}:${card.box}:${card.due_at}\n`);
         }
         if (fileWrites > 0) {
           res.write(`@@files:${fileWrites}\n`);

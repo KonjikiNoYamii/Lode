@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { send } from "@/api";
 import type { CardRating, ReviewCard } from "@/types";
+import { MAX_CARD_BOX } from "@/types";
 import { Brain, Plus, Trash2, X } from "lucide-react";
 
 interface Props {
@@ -111,7 +112,7 @@ export default function ReviewPanel({ conversationId, cards, onCardsUpdated }: P
               {open ? "Sembunyikan" : "Lihat jawaban"}
             </button>
           )}
-          {isDueCard ? (
+          {isDueCard &&
             RATINGS.map((r) => (
               <button
                 key={r.value}
@@ -120,12 +121,11 @@ export default function ReviewPanel({ conversationId, cards, onCardsUpdated }: P
               >
                 {r.label}
               </button>
-            ))
-          ) : (
-            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[9px] font-medium text-mist/70">
-              {dueLabel(card.due_at)} · kotak {card.box}/5
-            </span>
-          )}
+            ))}
+          <span className="ml-auto rounded-full border border-white/10 px-2 py-0.5 text-[9px] font-medium text-mist/70">
+            {isDueCard ? "jatuh tempo" : dueLabel(card.due_at)} · kotak {card.box}/
+            {MAX_CARD_BOX}
+          </span>
         </div>
       </li>
     );

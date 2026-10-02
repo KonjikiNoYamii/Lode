@@ -6,13 +6,12 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { send as apiSend } from "@/api";
+import { get as apiGet, send as apiSend } from "@/api";
 import type {
   LearnMode,
   Memory,
   Message,
   Mood,
-  CardRating,
   FileRevision,
   PlanItem,
   PlanStatus,
@@ -37,7 +36,6 @@ import { STATUS_META, masteryTone } from "./status";
 const STATUS_ORDER: TopicStatus[] = ["mastered", "learning", "stuck", "todo"];
 const PLAN_STATUSES: PlanStatus[] = ["todo", "learning", "done", "stuck"];
 const MODES: LearnMode[] = ["auto", "konsep", "latihan", "proyek", "uji", "ingat"];
-const RATINGS: CardRating[] = ["lupa", "nyaris", "ingat"];
 
 function FilterChip({
   active,
@@ -535,16 +533,16 @@ export default function ChatRoom({
 
       if (acc.match(/@@files:\d+/)) onRevisionsUpdated();
 
-      const cardMatch = acc.match(/@@card:(\d+):([a-z]+)/);
-      if (cardMatch) {
-        const cardId = Number(cardMatch[1]);
-        const rating = cardMatch[2] as CardRating;
-        if (Number.isSafeInteger(cardId) && RATINGS.includes(rating)) {
-          void apiSend<{ cards: ReviewCard[] }>(`/api/cards/${cardId}`, "PATCH", {
-          rating,
-        })
-          .then((r) => onCardsUpdated(r.cards))
-          .catch(() => undefined);
+// Server sudah menerapkan rating-nya; di sini cukup tarik ulang state
+      // supaya kartu tidak dihitung dua kali.
+      if (acc.match(/@@card:\d+:[a-z]+/)) {
+        const convId = currentIdRef.current;
+        if (convId) {
+          void apiGet<{ cards: ReviewCard[] }>(
+            `/api/cards?conversationId=${convId}`,
+          )
+            .then((r) => onCardsUpdated(r.cards ?? []))
+            .catch(() => undefined);
         }
       }
 

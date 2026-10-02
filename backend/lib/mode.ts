@@ -40,7 +40,10 @@ export const MODE_META: Record<LearnMode, { label: string; hint: string }> = {
 
 const CONCRETE_MODES: LearnMode[] = ["konsep", "latihan", "proyek", "uji", "ingat"];
 
-const MODE_INTENT: { mode: LearnMode; re: RegExp }[] = [
+/**
+ * Niat eksplisit pelajar. Selalu menang atas apa pun, termasuk kartu jatuh tempo.
+ */
+const STRONG_INTENT: { mode: LearnMode; re: RegExp }[] = [
   {
     mode: "uji",
     re: /\b(uji|ujian|quiz|kuis|exam|assessment|beri soal-soal|soal-soal)\b/i,
@@ -49,6 +52,14 @@ const MODE_INTENT: { mode: LearnMode; re: RegExp }[] = [
     mode: "ingat",
     re: /\b(ingat|review|ulang|recall|flashcard|kart(u|o)\s?ingatan|spaced)\b/i,
   },
+];
+
+/**
+ * Niat longgar dari kata umum ("file", "kode", "paham", ...). Sengaja kalah oleh
+ * kartu jatuh tempo: kalau tidak, hampir semua pesan menembak ke mode lain dan
+ * daftar kartu tidak pernah sampai ke prompt — kartu jadi selamanya kotak 1.
+ */
+const WEAK_INTENT: { mode: LearnMode; re: RegExp }[] = [
   {
     mode: "proyek",
     re: /\b(proyek|project|bikin|buat|implement|refactor|file|berkas|folder|repo|kode|script|program)\b/i,
@@ -62,6 +73,19 @@ const MODE_INTENT: { mode: LearnMode; re: RegExp }[] = [
     re: /\b(jelaskan|apa itu|apa itu\b|mengerti|paham|bingung|nihil|clear|konsep dasar)\b/i,
   },
 ];
+
+function matchIntent(
+  list: { mode: LearnMode; re: RegExp }[],
+  message: string,
+  hasFolder: boolean,
+): LearnMode | null {
+  for (const { mode, re } of list) {
+    if (!re.test(message)) continue;
+    if (mode === "proyek" && !hasFolder) continue;
+    return mode;
+  }
+  return null;
+}
 
 export interface ModeChoiceInput {
   message: string;
@@ -97,20 +121,26 @@ export function chooseMode(input: ModeChoiceInput): ModeChoice {
     return { mode: locked, locked: true, reason: "dikunci manual" };
   }
 
-  for (const { mode, re } of MODE_INTENT) {
-    if (re.test(input.message)) {
-      if (mode === "proyek" && !input.hasFolder) continue;
-      return { mode, locked: false, reason: "kunci kata di pesan" };
-    }
+  const strong = matchIntent(STRONG_INTENT, input.message, input.hasFolder);
+  if (strong) {
+    return { mode: strong, locked: false, reason: "kunci kata di pesan" };
   }
 
   if (input.dueCards > 0) {
     return { mode: "ingat", locked: false, reason: `${input.dueCards} kartu review jatuh tempo` };
   }
+
+  const weak = matchIntent(WEAK_INTENT, input.message, input.hasFolder);
+  if (weak) {
+    return { mode: weak, locked: false, reason: "kunci kata di pesan" };
+  }
+
   if (input.stuckCount > 0) {
     return { mode: "konsep", locked: false, reason: "ada topik yang buntu" };
   }
-  if (input.aiMode && isLearnMode(input.aiMode)) {
+  // Jangan lanjut di mode "ingat" kalau tidak ada kartu yang bisa diuji —
+  // kalau tidak, AI nyangkut di mode review tanpa kartu dan ikut mengarang materi.
+  if (input.aiMode && isLearnMode(input.aiMode) && input.aiMode !== "ingat") {
     return { mode: input.aiMode, locked: false, reason: "lanjutan mode sebelumnya" };
   }
   if (input.mastery >= 60) {
