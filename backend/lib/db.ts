@@ -209,6 +209,11 @@ CREATE TABLE IF NOT EXISTS review_cards (
 CREATE INDEX IF NOT EXISTS idx_cards_conv_due ON review_cards(conversation_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_cards_topic ON review_cards(topic_id);
 
+CREATE TABLE IF NOT EXISTS app_flags (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS file_revisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   conversation_id INTEGER NOT NULL DEFAULT 0,
@@ -454,6 +459,8 @@ export interface MaintenanceResult {
   freedTopics: number;
   freedMemories: number;
   freedPlan: number;
+  freedCards: number;
+  promotedCards: number;
   sizeBefore: number;
   sizeAfter: number;
   walBefore: number;
@@ -470,6 +477,39 @@ function walCheckpoint(): void {
   } catch {
     // checkpoint gagal — tidak fatal
   }
+}
+
+const FLAG_CARDS_PROMOTED = "cards_promoted_for_mastered";
+
+/**
+ * Backfill sekali jalan. Topik yang sudah `mastered` sebelum aturan "naikkan
+ * kotak saat transisi" ada tidak akan pernah punya transisi lagi, jadi
+ * kartunya akan menggantung selamanya di kotak 1. Majukan satu kali saja.
+ *
+ * Hanya kartu yang masih kotak 1 dan belum pernah dinilai — supaya topik yang
+ * kebetulan sudah dipromot oleh aturan transisi tidak jadi naik dua kali.
+ */
+function promoteCardsForMasteredTopics(): number {
+  if (db.prepare("SELECT 1 FROM app_flags WHERE key = ?").get(FLAG_CARDS_PROMOTED)) {
+    return 0;
+  }
+  const promoted = Number(
+    db
+      .prepare(
+        `UPDATE review_cards
+            SET box = box + 1, updated_at = datetime('now')
+          WHERE box = 1 AND reviews = 0
+            AND topic_id IN (
+              SELECT id FROM topics
+               WHERE status = 'mastered' AND TRIM(evidence) <> '' AND mastery >= ?
+            )`,
+      )
+      .run(MASTERY_MASTERED_MIN).changes,
+  );
+  db.prepare("INSERT OR REPLACE INTO app_flags (key, value) VALUES (?, datetime('now'))").run(
+    FLAG_CARDS_PROMOTED,
+  );
+  return promoted;
 }
 
 export function runMaintenance(): MaintenanceResult {
@@ -523,12 +563,22 @@ export function runMaintenance(): MaintenanceResult {
       .run().changes,
   );
 
+  const freedCards = Number(
+    db
+      .prepare(
+        "DELETE FROM review_cards WHERE conversation_id NOT IN (SELECT id FROM conversations)",
+      )
+      .run().changes,
+  );
+
+  const promotedCards = promoteCardsForMasteredTopics();
+
   db.prepare("PRAGMA optimize").all();
   walCheckpoint();
 
   const sizeAfter = readBytes(mainPath) + readBytes(walPath) + readBytes(shmPath);
   const walAfter = readBytes(walPath);
-  return { freedMessages, freedTopics, freedMemories, freedPlan, sizeBefore, sizeAfter, walBefore, walAfter };
+  return { freedMessages, freedTopics, freedMemories, freedPlan, freedCards, promotedCards, sizeBefore, sizeAfter, walBefore, walAfter };
 }
 
 function touchConversation(id: number): void {

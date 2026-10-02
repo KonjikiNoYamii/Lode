@@ -1459,9 +1459,15 @@ server.listen(PORT, HOST, () => {
   console.log(`[lode] AI endpoint: ${getProfile().ai_base_url}/chat/completions`);
   try {
     const r = runMaintenance();
-    if (r.freedMessages || r.freedTopics) {
+    const freed = r.freedMessages + r.freedTopics + r.freedCards;
+    if (r.promotedCards > 0) {
       console.log(
-        `[lode] pembersihan: ${r.freedMessages} pesan & ${r.freedTopics} topik yatim dihapus (${r.sizeBefore}B -> ${r.sizeAfter}B)`,
+        `[lode] kartu review: ${r.promotedCards} kartu topik yang sudah dikuasai dimajukan satu kotak`,
+      );
+    }
+    if (freed) {
+      console.log(
+        `[lode] pembersihan: ${r.freedMessages} pesan, ${r.freedTopics} topik & ${r.freedCards} kartu yatim dihapus (${r.sizeBefore}B -> ${r.sizeAfter}B)`,
       );
     } else {
       console.log(`[lode] pembersihan: tidak ada data yatim`);
