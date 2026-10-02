@@ -112,17 +112,18 @@ export default function ReviewPanel({ conversationId, cards, onCardsUpdated }: P
               {open ? "Sembunyikan" : "Lihat jawaban"}
             </button>
           )}
-          {/* Boleh nilai kapan saja, bukan cuma saat due — pelajar bisa langsung
-              menguji topik yang terasa sudah dikuasai tanpa menunggu jadwal. */}
-          {RATINGS.map((r) => (
-            <button
-              key={r.value}
-              onClick={() => rate(card.id, r.value)}
-              className={`rounded-full border px-2 py-0.5 text-[9px] font-bold transition ${r.chip}`}
-            >
-              {r.label}
-            </button>
-          ))}
+          {/* Penilaian utama dilakukan Lode lewat marker @@card. Tombol ini hanya
+              jalan manual untuk kasus kartu yang belum sempat dinilai AI. */}
+          {isDueCard &&
+            RATINGS.map((r) => (
+              <button
+                key={r.value}
+                onClick={() => rate(card.id, r.value)}
+                className={`rounded-full border px-2 py-0.5 text-[9px] font-bold transition ${r.chip}`}
+              >
+                {r.label}
+              </button>
+            ))}
           <span
             className={`ml-auto rounded-full border px-2 py-0.5 text-[9px] font-medium ${
               isDueCard
@@ -132,6 +133,7 @@ export default function ReviewPanel({ conversationId, cards, onCardsUpdated }: P
           >
             {isDueCard ? "jatuh tempo" : dueLabel(card.due_at)} · kotak {card.box}/
             {MAX_CARD_BOX}
+            {card.reviews > 0 && ` · dinilai Lode`}
           </span>
         </div>
       </li>

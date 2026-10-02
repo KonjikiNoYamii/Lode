@@ -1,4 +1,4 @@
-import { REVIEW_INSTRUCTIONS } from "./srs";
+import { CARD_RATING_RULES, REVIEW_ONLY_RULES } from "./srs";
 
 export type LearnMode = "auto" | "konsep" | "latihan" | "proyek" | "uji" | "ingat";
 
@@ -175,11 +175,16 @@ export function buildModeContext(
 ): string {
   if (mode === "auto") return "";
   const instructions = MODE_INSTRUCTIONS[mode];
+  // Penilaian kartu ikut di mode apa pun selama masih ada kartu jatuh tempo:
+  // Lode menilai penguasaan pelajar sambil mengajar, bukan cuma saat diminta review.
+  const rating = review
+    ? [...(mode === "ingat" ? REVIEW_ONLY_RULES : []), ...CARD_RATING_RULES, review]
+    : [];
   return [
     `=== MODE BELAJAR SEKARANG: ${MODE_META[mode].label.toUpperCase()} ===`,
     `Alasan: ${reason}. ${locked ? "Mode ini dikunci oleh pelajar, jadi PATUHI dan jangan berganti." : "Mode ini dipilih otomatis oleh sistem."}`,
     ...instructions,
-    ...(mode === "ingat" && review ? [...REVIEW_INSTRUCTIONS, review] : []),
+    ...rating,
     `Boleh pindah mode kalau alasannya jelas: tulis marker @@mode("konsep"|"latihan"|"proyek"|"uji"|"ingat") di baris PALING AKHIR jawabanmu. Marker itu disembunyikan dari tampilan.`,
   ].join("\n");
 }

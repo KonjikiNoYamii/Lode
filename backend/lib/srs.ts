@@ -81,13 +81,25 @@ export function buildReviewContext(cards: ReviewCard[], limit = 5): string {
   return `Kartu review jatuh tempo (${cards.length}):\n${lines.join("\n")}`;
 }
 
-/** Petunjuk untuk Lode: kartunya yang harus diuji dan cara menilainya. */
-export const REVIEW_INSTRUCTIONS = [
-  "INI MODE REVIEW KARTU. Daftar kartu di bawah adalah SATU-SATU hal yang boleh kamu uji — jangan menambah konsep, materi, atau soal baru, dan jangan mengulang penjelasan dari materi yang ada di daftar itu.",
-  "PILIH SATU kartu dari daftar di atas (sebut id-nya), lalu tanya frontsnya saja TANPA memberi jawaban.",
-  "Tunggu jawaban pelajar. Di giliran berikutnya nilai jawabannya dengan jujur, koreksi seperlunya.",
-  "WAJIB tutup giliran itu dengan marker @@card(<id>,\"lupa\"|\"nyaris\"|\"ingat\") di baris PALING AKHIR. Tanpa marker ini kartu tidak akan naik dan sistem tidak tahu kamu sudah mengujinya. Pilih \"ingat\" HANYA kalau pelajar benar-benar bisa menjawab sendiri tanpa bantuan.",
-  "Setelah memberi nilai, lanjut ke giliran berikutnya dan jangan menambah materi baru.",
+/**
+ * Penilaian kartu adalah TUGAS LODE, bukan tugas pelajar. Berlaku di SEMUA mode,
+ * bukan cuma saat mode review: kalau sedang mengajar, dia tetap menilai jawaban
+ * pelajar terhadap kartu yang jatuh tempo.
+ */
+export const CARD_RATING_RULES = [
+  "TUGASMU SETIAP GILIRAN: nilai jawaban pelajar terhadap kartu review yang jatuh tempo di daftar di bawah, lalu tulis marker @@card(<id>,\"lupa\"|\"nyaris\"|\"ingat\") di baris PALING AKHIR jawabanmu. Penilaian ini bagian dari mengajar — jangan menunggu pelajar minta diuji.",
+  "Nilai dari ISI jawaban pelajar, bukan dari nada baik atau keinginanmu:",
+  '  "ingat"  = pelajar benar-benar bisa menjelaskan/menjalankan sendiri TANPA bantuanmu (hint kecil tetap boleh kalau memang perlu).',
+  '  "nyaris" = inti sudah benar tapi ada bagian yang masih salah atau belum bisa dia jelaskan sendiri.',
+  '  "lupa"   = salah, belum bisa, atau cuma mengulang kalimatmu balik padamu.',
+  "Jangan naikkan nilai cuma supaya suasananya enak, dan jangan turunkan asal-asalan. Jujur saja.",
+  "Marker itu disembunyikan dari tampilan dan itu satu-satunya cara sistem tahu kartu sudah dinilai — TANPA marker, kartu tidak akan naik dan akan tetap di kotak yang sama selamanya.",
+];
+
+/** Tambahan khusus mode review: kartu jadi satu-satunya agenda giliran itu. */
+export const REVIEW_ONLY_RULES = [
+  "MODE REVIEW: daftar kartu di bawah adalah SATU-SATU hal yang boleh kamu uji. Jangan menambah konsep, materi, atau soal baru.",
+  "Satu kartu per giliran: sebut id-nya, lalu tanya frontsnya saja TANPA memberi jawaban. Tunggu jawabannya, lalu nilai di giliran berikutnya.",
 ];
 
 export function parseCardMarkers(text: string): {
