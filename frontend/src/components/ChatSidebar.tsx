@@ -13,6 +13,7 @@ interface Props {
   onFork?: (id: number) => void;
   onExport?: (id: number) => void;
   onImport?: (file: File) => void;
+  onForkClean?: (id: number) => void;
 }
 
 function SectionTitle({ children }: { children: string }) {
@@ -35,6 +36,7 @@ export default function ChatSidebar({
   onFork = () => {},
   onExport = () => {},
   onImport = () => {},
+  onForkClean = () => {},
 }: Props) {
   return (
     <aside
@@ -125,10 +127,20 @@ export default function ChatSidebar({
                       <button
                         onClick={() => onFork(c.id)}
                         className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-mew"
-                        aria-label="Lanjutkan di chat baru"
-                        title="Lanjutkan di chat baru"
+                        aria-label="Lanjutkan di chat baru (terbawa semua)"
+                        title="Lanjutkan di chat baru (terbawa semua)"
                       >
                         ⟶
+                      </button>
+                    )}
+                    {onForkClean && (
+                      <button
+                        onClick={() => onForkClean(c.id)}
+                        className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-mew/80"
+                        aria-label="Mulai sesi baru dari konteks ini (pesan lama dihapus)"
+                        title="Mulai sesi baru dari konteks ini (pesan lama dihapus)"
+                      >
+                        ✦
                       </button>
                     )}
                     {onExport && (

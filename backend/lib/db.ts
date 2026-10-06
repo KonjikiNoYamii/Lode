@@ -676,7 +676,7 @@ export interface ImportConversationResult {
   warnings: string[];
 }
 
-export function importConversationContext(input: ConversationExportPayload): ImportConversationResult {
+export function importConversationContext(input: ConversationExportPayload, opts: { includeMessages?: boolean } = {}): ImportConversationResult {
   const warnings: string[] = [];
   const title = String(input.conversation.title || "Tanpa judul").slice(0, 120);
   const folder = String(input.conversation.folder || "");
@@ -692,7 +692,7 @@ export function importConversationContext(input: ConversationExportPayload): Imp
   const newCid = Number(conv.lastInsertRowid);
   if (!newCid) throw new Error("Gagal membuat percakapan baru");
 
-  if (Array.isArray(input.messages)) {
+  if (opts.includeMessages !== false && Array.isArray(input.messages)) {
     const ins = db.prepare("INSERT INTO messages (conversation_id, role, content, mood, mode, created_at) VALUES (?, ?, ?, ?, ?, ?)");
     for (const m of input.messages) {
       const role = m.role === "assistant" || m.role === "user" || m.role === "system" ? m.role : "user";

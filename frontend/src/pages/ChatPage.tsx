@@ -1,4 +1,4 @@
-import { forkConversation, importConversation, downloadConversation } from "@/api";
+import { forkConversation, importConversation, downloadConversation, forkCleanConversation } from "@/api";
 import type { Message } from "@/types";
 import { loadState, send, get } from "@/api";
 import { useCallback, useEffect, useState } from "react";
@@ -223,6 +223,21 @@ export default function ChatPage() {
       }
     } catch (e) {
       alert(e instanceof Error ? e.message : "Gagal fork");
+    }
+  };
+
+  const handleForkClean = async (id: number) => {
+    try {
+      const r = await forkCleanConversation(id);
+      if (r.id) {
+        localStorage.setItem("lastConversationId", String(r.id));
+        setCurrentId(r.id);
+        await loadConversation(r.id);
+        await refresh(r.id);
+        setSideOpen(false);
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal fork bersih");
     }
   };
   return (

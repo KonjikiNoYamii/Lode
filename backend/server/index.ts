@@ -1195,11 +1195,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return sendJson(res, 200, base);
   }
   const convForkMatch = p.match(/^\/api\/conversations\/(\d+)\/fork$/);
-  if (convForkMatch && method === "POST") {
-    const cid = Number(convForkMatch[1]);
+  const convForkCleanMatch = p.match(/^\/api\/conversations\/(\d+)\/fork-clean$/);
+  if ((convForkMatch || convForkCleanMatch) && method === "POST") {
+    const cid = Number((convForkMatch || convForkCleanMatch)![1]);
     const base = exportConversationContext(cid);
     if (!base) return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
-    const resImport = importConversationContext(base);
+    const resImport = importConversationContext(base, { includeMessages: !!convForkMatch });
     return sendJson(res, 200, { id: resImport.id, warnings: resImport.warnings });
   }
   if (p === "/api/conversations/import" && method === "POST") {

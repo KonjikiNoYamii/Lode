@@ -57,3 +57,13 @@ export async function importConversation(payload: any): Promise<{ id: number; wa
   }
   return r.json() as Promise<{ id: number; warnings?: string[] }>;
 }
+
+export async function forkCleanConversation(id: number): Promise<{ id: number; warnings?: string[] }> {
+  const r = await fetch(`/api/conversations/${id}/fork-clean`, { method: "POST" });
+  if (!r.ok) {
+    let msg = "";
+    try { const j = (await r.json()) as { error?: string }; msg = j.error ?? ""; } catch {}
+    throw new Error(msg || `Gagal fork bersih (${r.status})`);
+  }
+  return r.json() as Promise<{ id: number; warnings?: string[] }>;
+}
