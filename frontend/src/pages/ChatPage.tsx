@@ -217,6 +217,7 @@ export default function ChatPage() {
       if (r.id) {
         localStorage.setItem("lastConversationId", String(r.id));
         setCurrentId(r.id);
+        // force fresh load
         await loadConversation(r.id);
         await refresh(r.id);
         setSideOpen(false);
@@ -232,6 +233,7 @@ export default function ChatPage() {
       if (r.id) {
         localStorage.setItem("lastConversationId", String(r.id));
         setCurrentId(r.id);
+        // force fresh load
         await loadConversation(r.id);
         await refresh(r.id);
         setSideOpen(false);
