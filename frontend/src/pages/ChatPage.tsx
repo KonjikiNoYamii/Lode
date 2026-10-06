@@ -216,9 +216,9 @@ export default function ChatPage() {
       const r = await forkConversation(id);
       if (r.id) {
         localStorage.setItem("lastConversationId", String(r.id));
-        await refresh(r.id);
-        await loadConversation(r.id);
         setCurrentId(r.id);
+        await loadConversation(r.id);
+        await refresh(r.id);
         setSideOpen(false);
       }
     } catch (e) {
