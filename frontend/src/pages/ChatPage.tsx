@@ -214,10 +214,12 @@ export default function ChatPage() {
   const handleFork = async (id: number) => {
     try {
       const r = await forkConversation(id);
-      await refresh(currentId);
       if (r.id) {
-        await loadConversation(r.id);
         localStorage.setItem("lastConversationId", String(r.id));
+        await refresh(r.id);
+        await loadConversation(r.id);
+        setCurrentId(r.id);
+        setSideOpen(false);
       }
     } catch (e) {
       alert(e instanceof Error ? e.message : "Gagal fork");
