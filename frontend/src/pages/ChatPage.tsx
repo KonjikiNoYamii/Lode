@@ -1,3 +1,4 @@
+import { forkConversation, importConversation, downloadConversation } from "@/api";
 import type { Message } from "@/types";
 import { loadState, send, get } from "@/api";
 import { useCallback, useEffect, useState } from "react";
@@ -210,6 +211,18 @@ export default function ChatPage() {
     [currentId, refresh],
   );
 
+  const handleFork = async (id: number) => {
+    try {
+      const r = await forkConversation(id);
+      await refresh(currentId);
+      if (r.id) {
+        await loadConversation(r.id);
+        localStorage.setItem("lastConversationId", String(r.id));
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal fork");
+    }
+  };
   return (
     <div className="flex h-full gap-3 p-3">
       {sideOpen && (
@@ -228,6 +241,9 @@ export default function ChatPage() {
         onNewChat={newChat}
         onSelect={loadConversation}
         onDelete={removeConversation}
+        onFork={handleFork}
+        onExport={handleExport}
+        onImport={handleImport}
       />
 
       <ChatRoom
@@ -259,3 +275,37 @@ export default function ChatPage() {
     </div>
   );
 }
+
+  const handleExport = async (id: number) => {
+    try {
+      const data = await downloadConversation(id);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const name = (data?.conversation?.title || "percakapan").toString().replace(/[^a-z0-9\-]+/gi, "-").slice(0, 40);
+      a.href = url;
+      a.download = `lode-${name || "percakapan"}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal ekspor");
+    }
+  };
+  const handleImport = async (file: File) => {
+    try {
+      const txt = await file.text();
+      const payload = JSON.parse(txt);
+      const r = await importConversation(payload);
+      if (r.id) {
+        localStorage.setItem("lastConversationId", String(r.id));
+        window.location.reload();
+      }
+      if (r.warnings && r.warnings.length > 0) {
+        alert(r.warnings.join("\n"));
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Gagal impor");
+    }
+  };

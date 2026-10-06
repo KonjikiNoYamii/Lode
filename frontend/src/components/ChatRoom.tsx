@@ -70,10 +70,23 @@ function isMood(v: string | undefined): v is Mood {
 
 function stripStreamMood(s: string): string {
   return s
+    .replace(/\n?@@reset\s*/g, "")
     .replace(/\n?@@mood:[a-z]+\s*/g, "")
     .replace(/\n?@@plan:\d+:[a-z]+\s*/g, "")
     .replace(/\n?@@files:\d+\s*/g, "")
     .replace(/\n?@@mode:[a-z]+\s*/g, "");
+}
+
+const RESET_MARKER = "\n@@reset\n";
+
+/**
+ * Buang semua teks sebelum marker reset terakhir — backend mengirimnya ketika
+ * Gemini mengulang jawaban dari awal, supaya teks yang salah tidak tertinggal.
+ */
+function applyStreamReset(s: string): string {
+  const at = s.lastIndexOf(RESET_MARKER);
+  if (at === -1) return s;
+  return s.slice(at + RESET_MARKER.length);
 }
 
 function extractStreamResult(raw: string): { text: string; error: string } {
@@ -507,6 +520,7 @@ export default function ChatRoom({
         if (done) break;
         acc += decoder.decode(value, { stream: true });
         if (controller.signal.aborted) return;
+        if (acc.includes(RESET_MARKER)) acc = applyStreamReset(acc);
         setLive(stripStreamMood(acc).replace(/\n?@@ai-error:[^\n]*/g, ""));
 
         const streamMarker = acc.match(/@@mood:([a-z]+)/);
@@ -521,6 +535,7 @@ export default function ChatRoom({
       }
       acc += decoder.decode();
       if (controller.signal.aborted) return;
+      if (acc.includes(RESET_MARKER)) acc = applyStreamReset(acc);
 
       const result = extractStreamResult(acc);
       const moodMatch = acc.match(/@@mood:([a-z]+)/);

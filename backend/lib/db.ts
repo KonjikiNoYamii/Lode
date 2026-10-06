@@ -1,3 +1,5 @@
+const MASTERY_MAX_GAIN_PER_TURN = 20;
+const MASTERY_MASTERED_MIN = 60;
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, statSync } from "node:fs";
 import os from "node:os";
@@ -595,57 +597,202 @@ export function listTopicsByConversation(conversationId: number): Topic[] {
     .all(conversationId) as unknown as Topic[];
 }
 
-const TOPIC_STATUSES = new Set(["mastered", "learning", "stuck", "todo"]);
-
-export const MASTERY_MASTERED_MIN = 60;
-export const MASTERY_MAX_GAIN_PER_TURN = 20;
-
-export function getTopic(id: number): Topic | undefined {
-  return db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic | undefined;
+export interface ConversationExportPayload {
+  format: "lode-conversation";
+  version: 1;
+  exported_at: string;
+  conversation: Omit<Conversation, "id" | "message_count"> & { folder?: string };
+  messages: Array<
+    Pick<Message, "role" | "content" | "mood" | "mode"> & { created_at?: string }
+  >;
+  topics: Array<
+    Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence"> & {
+      updated_at?: string;
+      last_reviewed_at?: string;
+    }
+  >;
+  memories: Array<Pick<Memory, "type" | "content"> & { created_at?: string }>;
+  plan_items: Array<
+    Pick<PlanItem, "phase" | "title" | "objective" | "prerequisites" | "status" | "order_index"> & {
+      updated_at?: string;
+    }
+  >;
+  workspace_files: Array<{ rel: string; content: string | null; updated_at?: string }>;
 }
 
-function clampPercent(value: number | undefined, fallback = 0): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-export interface TopicEvidence {
-  mastery?: number;
-  confidence?: number;
-  evidence?: string;
-}
-
-export interface TopicWriteResult {
-  id: number;
-  status: string;
-  mastery: number;
-  downgraded: boolean;
-}
-
-function enforceEvidenceRules(  status: string,
-  mastery: number,
-  evidence: string,
-): { status: string; mastery: number; downgraded: boolean } {
-  if (status !== "mastered") return { status, mastery, downgraded: false };
-  if (evidence && mastery >= MASTERY_MASTERED_MIN) {
-    return { status, mastery, downgraded: false };
-  }
+export function exportConversationContext(id: number): ConversationExportPayload | null {
+  const conv = getConversation(id);
+  if (!conv) return null;
+  const base = db.prepare("SELECT title, folder, mode, ai_mode, created_at, updated_at FROM conversations WHERE id = ?").get(id) as {
+    title: string;
+    folder: string;
+    mode: string;
+    ai_mode: string;
+    created_at: string;
+    updated_at: string;
+  };
+  const messages = db
+    .prepare("SELECT role, content, mood, mode, created_at FROM messages WHERE conversation_id = ? ORDER BY id ASC")
+    .all(id) as Array<Pick<Message, "role" | "content" | "mood" | "mode"> & { created_at: string }>;
+  const topics = db
+    .prepare("SELECT name, status, notes, mastery, confidence, evidence, updated_at, last_reviewed_at FROM topics WHERE conversation_id = ? ORDER BY id ASC")
+    .all(id) as Array<Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence"> & { updated_at: string; last_reviewed_at: string }>;
+  const memories = db
+    .prepare("SELECT type, content, created_at FROM memories WHERE conversation_id = ? ORDER BY id ASC")
+    .all(id) as Array<Pick<Memory, "type" | "content"> & { created_at: string }>;
+  const plan_items = db
+    .prepare("SELECT phase, title, objective, prerequisites, status, order_index, updated_at FROM plan_items WHERE conversation_id = ? ORDER BY phase ASC, order_index ASC, id ASC")
+    .all(id) as Array<Pick<PlanItem, "phase" | "title" | "objective" | "prerequisites" | "status" | "order_index"> & { updated_at: string }>;
+  const workspace_files = db
+    .prepare("SELECT rel, updated_at FROM workspace_files WHERE conversation_id = ? ORDER BY id ASC")
+    .all(id) as Array<{ rel: string; updated_at: string }>;
   return {
-    status: "learning",
-    mastery: evidence ? mastery : Math.min(mastery, MASTERY_MASTERED_MIN - 1),
-    downgraded: true,
+    format: "lode-conversation",
+    version: 1,
+    exported_at: new Date().toISOString(),
+    conversation: {
+      title: base.title,
+      folder: base.folder,
+      mode: base.mode as any,
+      ai_mode: base.ai_mode,
+      created_at: base.created_at,
+      updated_at: base.updated_at,
+      ai_thread: "",
+      ai_session: "",
+    } as any,
+    messages,
+    topics,
+    memories,
+    plan_items,
+    workspace_files: workspace_files.map((r) => ({ rel: r.rel, content: null, updated_at: r.updated_at })),
   };
 }
 
-export function upsertTopic(
-  name: string,
-  status: string,
-  notes: string = "",
-  conversationId = 0,
-  extra: TopicEvidence = {},
-): number {
-  return writeTopic(name, status, notes, conversationId, extra).id;
+
+const TOPIC_STATUSES = new Set(["todo", "learning", "stuck", "mastered"]);
+
+export interface ImportConversationResult {
+  id: number;
+  warnings: string[];
 }
+
+export function importConversationContext(input: ConversationExportPayload): ImportConversationResult {
+  const warnings: string[] = [];
+  const title = String(input.conversation.title || "Tanpa judul").slice(0, 120);
+  const folder = String(input.conversation.folder || "");
+  const mode = String(input.conversation.mode || "auto");
+  const aiMode = String(input.conversation.ai_mode || "");
+  const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const createdAt = (input.conversation.created_at && String(input.conversation.created_at).trim()) || ts;
+  const updatedAt = (input.conversation.updated_at && String(input.conversation.updated_at).trim()) || ts;
+  const aiSession = "";
+  const aiThread = "";
+  const conv = db.prepare("INSERT INTO conversations (title, folder, mode, ai_mode, ai_thread, ai_session, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(title, folder, mode, aiMode, aiThread, aiSession, createdAt, updatedAt || ts);
+  const newCid = Number(conv.lastInsertRowid);
+  if (!newCid) throw new Error("Gagal membuat percakapan baru");
+
+  if (Array.isArray(input.messages)) {
+    const ins = db.prepare("INSERT INTO messages (conversation_id, role, content, mood, mode, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    for (const m of input.messages) {
+      const role = m.role === "assistant" || m.role === "user" || m.role === "system" ? m.role : "user";
+      const content = String(m.content || "");
+      const mood = String(m.mood || "");
+      const mode = String(m.mode || "");
+      const createdAt = m.created_at || new Date().toISOString().replace("T", " ").slice(0, 19);
+      ins.run(newCid, role, content, mood, mode, createdAt);
+    }
+  }
+
+  if (Array.isArray(input.topics)) {
+    const ins = db.prepare("INSERT INTO topics (name, status, notes, conversation_id, updated_at, mastery, confidence, evidence, last_reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const t of input.topics) {
+      const name = String(t.name || "").trim().slice(0, 120);
+      if (!name) continue;
+      const status = TOPIC_STATUSES.has(String(t.status)) ? String(t.status) : "learning";
+      const notes = String(t.notes || "").slice(0, 300);
+      const evidence = String(t.evidence || "").slice(0, 300);
+      const mastery = clampPercent(t.mastery, 0);
+      const confidence = clampPercent(t.confidence, 0);
+      const updatedAt = t.updated_at || new Date().toISOString().replace("T", " ").slice(0, 19);
+      const lastReviewedAt = t.last_reviewed_at || "";
+      try {
+        ins.run(name, status, notes, newCid, updatedAt, mastery, confidence, evidence, lastReviewedAt);
+      } catch (e) {
+        warnings.push(`Topik terlewat (kemungkinan duplikat nama): ${name}`);
+      }
+    }
+  }
+
+  if (Array.isArray(input.memories)) {
+    const ins = db.prepare("INSERT INTO memories (type, content, conversation_id, created_at) VALUES (?, ?, ?, ?)");
+    for (const mem of input.memories) {
+      const type = String(mem.type || "insight").slice(0, 40);
+      const content = String(mem.content || "").slice(0, 500);
+      if (!content) continue;
+      const createdAt = mem.created_at || new Date().toISOString().replace("T", " ").slice(0, 19);
+      try {
+        ins.run(type, content, newCid, createdAt);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (Array.isArray(input.plan_items)) {
+    const ins = db.prepare("INSERT INTO plan_items (conversation_id, phase, title, objective, prerequisites, status, order_index, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const p of input.plan_items) {
+      const phase = Number.isFinite(Number(p.phase)) ? Math.max(1, Math.trunc(Number(p.phase))) : 1;
+      const title = String(p.title || "Tanpa judul");
+      const objective = String(p.objective || "");
+      const prerequisites = String(p.prerequisites || "");
+      const sst = String(p.status);
+      const status = sst === "todo" || sst === "in_progress" || sst === "done" || sst === "skipped" ? sst : "todo";
+      const orderIndex = Number.isFinite(Number(p.order_index)) ? Math.trunc(Number(p.order_index)) : 0;
+      const updatedAt = p.updated_at || new Date().toISOString().replace("T", " ").slice(0, 19);
+      ins.run(newCid, phase, title, objective, prerequisites, status, orderIndex, updatedAt);
+    }
+  }
+
+  if (Array.isArray(input.workspace_files)) {
+    const ins = db.prepare("INSERT INTO workspace_files (conversation_id, rel, updated_at) VALUES (?, ?, ?) ON CONFLICT(conversation_id, rel) DO UPDATE SET updated_at = excluded.updated_at");
+    for (const wf of input.workspace_files) {
+      const rel = String(wf.rel || "").trim();
+      if (!rel) continue;
+      const updatedAt = wf.updated_at || new Date().toISOString().replace("T", " ").slice(0, 19);
+      try {
+        ins.run(newCid, rel, updatedAt);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  db.prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(newCid);
+  walCheckpoint();
+  return { id: newCid, warnings };
+}
+export function upsertWorkspaceFile(conversationId: number, rel: string): void {
+  const clean = rel.trim();
+  if (!clean) return;
+  db.prepare(
+    `INSERT INTO workspace_files (conversation_id, rel)
+     VALUES (?, ?)
+     ON CONFLICT(conversation_id, rel) DO UPDATE SET updated_at = datetime('now')`,
+  ).run(conversationId, clean);
+}
+
+
+export function listWorkspaceFiles(conversationId: number): WorkspaceFileRecord[] {
+  return db
+    .prepare(
+      "SELECT * FROM workspace_files WHERE conversation_id = ? ORDER BY updated_at DESC, rel ASC",
+    )
+    .all(conversationId) as unknown as WorkspaceFileRecord[];
+}
+
+const PLAN_STATUSES = new Set(["todo", "learning", "done", "stuck"]);
+
 
 export function writeTopic(
   name: string,
@@ -725,6 +872,151 @@ export function writeTopic(
   return { id: newId, ...ruled };
 }
 
+
+export function listPlanItems(conversationId: number): PlanItem[] {
+  return db
+    .prepare(
+      `SELECT * FROM plan_items
+       WHERE conversation_id = ?
+       ORDER BY phase ASC, order_index ASC, id ASC`,
+    )
+    .all(conversationId) as unknown as PlanItem[];
+}
+
+function nextOrderIndex(conversationId: number, phase: number): number {
+  const row = db
+    .prepare(
+      "SELECT COALESCE(MAX(order_index), -1) AS m FROM plan_items WHERE conversation_id = ? AND phase = ?",
+    )
+    .get(conversationId, phase) as { m: number };
+  return Number(row.m) + 1;
+}
+
+
+export function movePlanItem(
+  conversationId: number,
+  id: number,
+  dir: "up" | "down",
+): void {
+  const item = db
+    .prepare(
+      "SELECT id, phase, order_index FROM plan_items WHERE id = ? AND conversation_id = ?",
+    )
+    .get(id, conversationId) as
+    | { id: number; phase: number; order_index: number }
+    | undefined;
+  if (!item) return;
+  const cmp = dir === "up" ? "<" : ">";
+  const order = dir === "up" ? "DESC" : "ASC";
+  const sibling = db
+    .prepare(
+      `SELECT id, order_index FROM plan_items
+       WHERE conversation_id = ? AND phase = ? AND order_index ${cmp} ?
+       ORDER BY order_index ${order}
+       LIMIT 1`,
+    )
+    .get(conversationId, item.phase, item.order_index) as
+    | { id: number; order_index: number }
+    | undefined;
+  if (!sibling) return;
+  const a = item.order_index;
+  const b = sibling.order_index;
+  db.prepare(
+    "UPDATE plan_items SET order_index = ? WHERE id = ?",
+  ).run(b, item.id);
+  db.prepare(
+    "UPDATE plan_items SET order_index = ? WHERE id = ?",
+  ).run(a, sibling.id);
+}
+// ---------- riwayat file (backup & undo) ----------
+
+const REVISION_KEEP = 200;
+
+export interface RevisionInput {
+  conversationId: number;
+  rel: string;
+  prev: string | null;
+  next: string;
+  added?: number;
+  removed?: number;
+  source?: string;
+}
+
+/** Simpan isi file SEBELUM perubahan, supaya perubahan bisa dibatalkan. */
+
+export function patchPlanItem(
+  id: number,
+  patch: {
+    title?: string;
+    objective?: string;
+    prerequisites?: string;
+    phase?: number;
+    status?: string;
+  },
+): void {
+  const sets: string[] = [];
+  const values: (string | number)[] = [];
+  if (patch.title !== undefined) {
+    const title = patch.title.trim().slice(0, 200);
+    if (!title) return;
+    sets.push("title = ?");
+    values.push(title);
+  }
+  if (patch.objective !== undefined) {
+    sets.push("objective = ?");
+    values.push(patch.objective.trim().slice(0, 500));
+  }
+  if (patch.prerequisites !== undefined) {
+    sets.push("prerequisites = ?");
+    values.push(patch.prerequisites.trim().slice(0, 300));
+  }
+  if (patch.phase !== undefined) {
+    const phase = Number(patch.phase);
+    if (Number.isFinite(phase) && phase > 0) {
+      sets.push("phase = ?");
+      values.push(Math.min(Math.trunc(phase), 99));
+    }
+  }
+  if (patch.status !== undefined) {
+    sets.push("status = ?");
+    values.push(PLAN_STATUSES.has(patch.status) ? patch.status : "todo");
+  }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(
+    `UPDATE plan_items SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`,
+  ).run(...values);
+}
+
+
+export function recordFileRevision(input: RevisionInput): number {
+  const rel = input.rel.trim().slice(0, 300);
+  if (!rel || !input.conversationId) return 0;
+  const result = db
+    .prepare(
+      `INSERT INTO file_revisions (conversation_id, rel, content, existed, bytes, added, removed, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.conversationId,
+      rel,
+      input.prev ?? "",
+      input.prev === null ? 0 : 1,
+      Buffer.byteLength(input.prev ?? "", "utf8"),
+      Math.max(0, Math.trunc(input.added ?? 0)),
+      Math.max(0, Math.trunc(input.removed ?? 0)),
+      String(input.source ?? "lode").slice(0, 20),
+    );
+  db.prepare(
+    `DELETE FROM file_revisions
+     WHERE conversation_id = ? AND id NOT IN (
+       SELECT id FROM file_revisions WHERE conversation_id = ? ORDER BY id DESC LIMIT ?
+     )`,
+  ).run(input.conversationId, input.conversationId, REVISION_KEEP);
+  return Number(result.lastInsertRowid);
+}
+
+
 export function patchTopic(
   id: number,
   patch: {
@@ -796,15 +1088,76 @@ export function patchTopic(
   ).run(...values);
 }
 
-export function deleteTopic(id: number): void {
-  db.prepare("DELETE FROM topics WHERE id = ?").run(id);
+
+export function getFileRevision(id: number): FileRevision | undefined {
+  return db.prepare("SELECT * FROM file_revisions WHERE id = ?").get(id) as
+    | FileRevision
+    | undefined;
 }
+
+
+export function getTopic(id: number): Topic | undefined {
+  return db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic | undefined;
+}
+
+function clampPercent(value: number | undefined, fallback = 0): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+export interface TopicEvidence {
+  mastery?: number;
+  confidence?: number;
+  evidence?: string;
+}
+
+export interface TopicWriteResult {
+  id: number;
+  status: string;
+  mastery: number;
+  downgraded: boolean;
+}
+
+function enforceEvidenceRules(  status: string,
+  mastery: number,
+  evidence: string,
+): { status: string; mastery: number; downgraded: boolean } {
+  if (status !== "mastered") return { status, mastery, downgraded: false };
+  if (evidence && mastery >= MASTERY_MASTERED_MIN) {
+    return { status, mastery, downgraded: false };
+  }
+  return {
+    status: "learning",
+    mastery: evidence ? mastery : Math.min(mastery, MASTERY_MASTERED_MIN - 1),
+    downgraded: true,
+  };
+}
+
+
+export function listFileRevisions(
+  conversationId: number,
+  limit = 20,
+): FileRevision[] {
+  return db
+    .prepare(
+      `SELECT * FROM file_revisions
+       WHERE conversation_id = ?
+       ORDER BY id DESC
+       LIMIT ?`,
+    )
+    .all(
+      conversationId,
+      Math.max(1, Math.min(100, Math.trunc(limit) || 20)),
+    ) as unknown as FileRevision[];
+}
+
 
 export function listMemories(): Memory[] {
   return db
     .prepare("SELECT * FROM memories ORDER BY id DESC LIMIT 100")
     .all() as unknown as Memory[];
 }
+
 
 export function listMemoriesByConversation(conversationId: number): Memory[] {
   return db
@@ -813,6 +1166,29 @@ export function listMemoriesByConversation(conversationId: number): Memory[] {
     )
     .all(conversationId) as unknown as Memory[];
 }
+
+
+export function deleteMemory(id: number): void {
+  db.prepare("DELETE FROM memories WHERE id = ?").run(id);
+}
+
+export interface WorkspaceFileRecord {
+  id: number;
+  conversation_id: number;
+  rel: string;
+  updated_at: string;
+}
+
+
+export function deletePlanItem(id: number): void {
+  db.prepare("DELETE FROM plan_items WHERE id = ?").run(id);
+}
+
+
+export function deleteTopic(id: number): void {
+  db.prepare("DELETE FROM topics WHERE id = ?").run(id);
+}
+
 
 export function addMemory(
   type: string,
@@ -832,55 +1208,6 @@ export function addMemory(
   ).run(type.slice(0, 40) || "insight", clean, conversationId);
 }
 
-export function deleteMemory(id: number): void {
-  db.prepare("DELETE FROM memories WHERE id = ?").run(id);
-}
-
-export interface WorkspaceFileRecord {
-  id: number;
-  conversation_id: number;
-  rel: string;
-  updated_at: string;
-}
-
-export function upsertWorkspaceFile(conversationId: number, rel: string): void {
-  const clean = rel.trim();
-  if (!clean) return;
-  db.prepare(
-    `INSERT INTO workspace_files (conversation_id, rel)
-     VALUES (?, ?)
-     ON CONFLICT(conversation_id, rel) DO UPDATE SET updated_at = datetime('now')`,
-  ).run(conversationId, clean);
-}
-
-export function listWorkspaceFiles(conversationId: number): WorkspaceFileRecord[] {
-  return db
-    .prepare(
-      "SELECT * FROM workspace_files WHERE conversation_id = ? ORDER BY updated_at DESC, rel ASC",
-    )
-    .all(conversationId) as unknown as WorkspaceFileRecord[];
-}
-
-const PLAN_STATUSES = new Set(["todo", "learning", "done", "stuck"]);
-
-export function listPlanItems(conversationId: number): PlanItem[] {
-  return db
-    .prepare(
-      `SELECT * FROM plan_items
-       WHERE conversation_id = ?
-       ORDER BY phase ASC, order_index ASC, id ASC`,
-    )
-    .all(conversationId) as unknown as PlanItem[];
-}
-
-function nextOrderIndex(conversationId: number, phase: number): number {
-  const row = db
-    .prepare(
-      "SELECT COALESCE(MAX(order_index), -1) AS m FROM plan_items WHERE conversation_id = ? AND phase = ?",
-    )
-    .get(conversationId, phase) as { m: number };
-  return Number(row.m) + 1;
-}
 
 export function createPlanItem(
   conversationId: number,
@@ -907,150 +1234,4 @@ export function createPlanItem(
   return Number(result.lastInsertRowid);
 }
 
-export function patchPlanItem(
-  id: number,
-  patch: {
-    title?: string;
-    objective?: string;
-    prerequisites?: string;
-    phase?: number;
-    status?: string;
-  },
-): void {
-  const sets: string[] = [];
-  const values: (string | number)[] = [];
-  if (patch.title !== undefined) {
-    const title = patch.title.trim().slice(0, 200);
-    if (!title) return;
-    sets.push("title = ?");
-    values.push(title);
-  }
-  if (patch.objective !== undefined) {
-    sets.push("objective = ?");
-    values.push(patch.objective.trim().slice(0, 500));
-  }
-  if (patch.prerequisites !== undefined) {
-    sets.push("prerequisites = ?");
-    values.push(patch.prerequisites.trim().slice(0, 300));
-  }
-  if (patch.phase !== undefined) {
-    const phase = Number(patch.phase);
-    if (Number.isFinite(phase) && phase > 0) {
-      sets.push("phase = ?");
-      values.push(Math.min(Math.trunc(phase), 99));
-    }
-  }
-  if (patch.status !== undefined) {
-    sets.push("status = ?");
-    values.push(PLAN_STATUSES.has(patch.status) ? patch.status : "todo");
-  }
-  if (sets.length === 0) return;
-  values.push(id);
-  db.prepare(
-    `UPDATE plan_items SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`,
-  ).run(...values);
-}
 
-export function deletePlanItem(id: number): void {
-  db.prepare("DELETE FROM plan_items WHERE id = ?").run(id);
-}
-
-export function movePlanItem(
-  conversationId: number,
-  id: number,
-  dir: "up" | "down",
-): void {
-  const item = db
-    .prepare(
-      "SELECT id, phase, order_index FROM plan_items WHERE id = ? AND conversation_id = ?",
-    )
-    .get(id, conversationId) as
-    | { id: number; phase: number; order_index: number }
-    | undefined;
-  if (!item) return;
-  const cmp = dir === "up" ? "<" : ">";
-  const order = dir === "up" ? "DESC" : "ASC";
-  const sibling = db
-    .prepare(
-      `SELECT id, order_index FROM plan_items
-       WHERE conversation_id = ? AND phase = ? AND order_index ${cmp} ?
-       ORDER BY order_index ${order}
-       LIMIT 1`,
-    )
-    .get(conversationId, item.phase, item.order_index) as
-    | { id: number; order_index: number }
-    | undefined;
-  if (!sibling) return;
-  const a = item.order_index;
-  const b = sibling.order_index;
-  db.prepare(
-    "UPDATE plan_items SET order_index = ? WHERE id = ?",
-  ).run(b, item.id);
-  db.prepare(
-    "UPDATE plan_items SET order_index = ? WHERE id = ?",
-  ).run(a, sibling.id);
-}
-// ---------- riwayat file (backup & undo) ----------
-
-const REVISION_KEEP = 200;
-
-export interface RevisionInput {
-  conversationId: number;
-  rel: string;
-  prev: string | null;
-  next: string;
-  added?: number;
-  removed?: number;
-  source?: string;
-}
-
-/** Simpan isi file SEBELUM perubahan, supaya perubahan bisa dibatalkan. */
-export function recordFileRevision(input: RevisionInput): number {
-  const rel = input.rel.trim().slice(0, 300);
-  if (!rel || !input.conversationId) return 0;
-  const result = db
-    .prepare(
-      `INSERT INTO file_revisions (conversation_id, rel, content, existed, bytes, added, removed, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      input.conversationId,
-      rel,
-      input.prev ?? "",
-      input.prev === null ? 0 : 1,
-      Buffer.byteLength(input.prev ?? "", "utf8"),
-      Math.max(0, Math.trunc(input.added ?? 0)),
-      Math.max(0, Math.trunc(input.removed ?? 0)),
-      String(input.source ?? "lode").slice(0, 20),
-    );
-  db.prepare(
-    `DELETE FROM file_revisions
-     WHERE conversation_id = ? AND id NOT IN (
-       SELECT id FROM file_revisions WHERE conversation_id = ? ORDER BY id DESC LIMIT ?
-     )`,
-  ).run(input.conversationId, input.conversationId, REVISION_KEEP);
-  return Number(result.lastInsertRowid);
-}
-
-export function listFileRevisions(
-  conversationId: number,
-  limit = 20,
-): FileRevision[] {
-  return db
-    .prepare(
-      `SELECT * FROM file_revisions
-       WHERE conversation_id = ?
-       ORDER BY id DESC
-       LIMIT ?`,
-    )
-    .all(
-      conversationId,
-      Math.max(1, Math.min(100, Math.trunc(limit) || 20)),
-    ) as unknown as FileRevision[];
-}
-
-export function getFileRevision(id: number): FileRevision | undefined {
-  return db.prepare("SELECT * FROM file_revisions WHERE id = ?").get(id) as
-    | FileRevision
-    | undefined;
-}

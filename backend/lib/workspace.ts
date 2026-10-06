@@ -434,6 +434,13 @@ export async function applyWorkspaceWrites(
     }
     try {
       await fs.mkdir(target, { recursive: true });
+      try {
+        const realTarget = await fs.realpath(target);
+        if (!isInside(root, realTarget)) {
+          results.push({ rel: mk, created: false, bytes: 0, error: "di luar workspace" });
+          continue;
+        }
+      } catch {}
       results.push({ rel: `${mk}/`, created: true, bytes: 0 });
     } catch (err) {
       results.push({
@@ -492,6 +499,13 @@ export async function applyWorkspaceWrites(
         results.push({ rel: w.rel, created: false, bytes: 0, error: "di luar workspace" });
         continue;
       }
+      try {
+        const lst = await fs.lstat(target);
+        if (lst.isSymbolicLink()) {
+          results.push({ rel: w.rel, created: false, bytes: 0, error: "target adalah symlink" });
+          continue;
+        }
+      } catch {}
       await fs.writeFile(target, w.content, "utf8");
       results.push({
         rel: w.rel,
@@ -552,6 +566,18 @@ export async function restoreWorkspaceFile(
       return { rel, ok: false, error: "isi file terlalu besar (>100KB)" };
     }
     await fs.mkdir(path.dirname(target), { recursive: true });
+    try {
+      const realDir = await fs.realpath(path.dirname(target));
+      if (!isInside(root, realDir)) {
+        return { rel, ok: false, error: "di luar workspace" };
+      }
+    } catch {}
+    try {
+      const lst = await fs.lstat(target);
+      if (lst.isSymbolicLink()) {
+        return { rel, ok: false, error: "target adalah symlink" };
+      }
+    } catch {}
     await fs.writeFile(target, content, "utf8");
     return { rel, ok: true };
   } catch (err) {

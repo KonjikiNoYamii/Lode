@@ -30,3 +30,30 @@ export async function send<T>(
 }
 
 export const loadState = () => get<State>("/api/state");
+export async function downloadConversation(id: number): Promise<any> {
+  const r = await fetch(`/api/conversations/${id}/export`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+export async function forkConversation(id: number): Promise<{ id: number; warnings?: string[] }> {
+  const r = await fetch(`/api/conversations/${id}/fork`, { method: "POST" });
+  if (!r.ok) {
+    let msg = "";
+    try { const j = (await r.json()) as { error?: string }; msg = j.error ?? ""; } catch {}
+    throw new Error(msg || `Gagal fork (${r.status})`);
+  }
+  return r.json() as Promise<{ id: number; warnings?: string[] }>;
+}
+export async function importConversation(payload: any): Promise<{ id: number; warnings?: string[] }> {
+  const r = await fetch("/api/conversations/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) {
+    let msg = "";
+    try { const j = (await r.json()) as { error?: string }; msg = j.error ?? ""; } catch {}
+    throw new Error(msg || `Gagal import (${r.status})`);
+  }
+  return r.json() as Promise<{ id: number; warnings?: string[] }>;
+}

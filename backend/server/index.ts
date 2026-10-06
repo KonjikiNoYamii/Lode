@@ -35,6 +35,9 @@ import {
   updateProfile,
   upsertWorkspaceFile,
   writeTopic,
+  type ConversationExportPayload,
+  exportConversationContext,
+  importConversationContext,
 } from "../lib/db";
 import {
   aiRequestHeaders,
@@ -98,7 +101,11 @@ const MIME: Record<string, string> = {
 
 const READ_MARKER = /@@read\("([^"]+)"\)/g;
 
-function makeWriteFilter(): { fed: (delta: string) => string; end: () => string } {
+function makeWriteFilter(): {
+  fed: (delta: string) => string;
+  end: () => string;
+  reset: () => void;
+} {
   let inBlock = false;
   let buf = "";
   return {
@@ -140,6 +147,10 @@ function makeWriteFilter(): { fed: (delta: string) => string; end: () => string 
       buf = "";
       return r;
     },
+    reset(): void {
+      inBlock = false;
+      buf = "";
+    },
   };
 }
 
@@ -162,8 +173,7 @@ function sendJson(
   res.end(JSON.stringify(obj));
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  const maxBytes = 1_000_000;
+function readBody(req: IncomingMessage, maxBytes = 1_000_000): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -213,6 +223,7 @@ function writeAiError(res: ServerResponse, message: string): void {
 async function forwardSse(
   upstream: ReadableStream<Uint8Array>,
   onDelta: (delta: string) => void,
+  onReset?: () => void,
 ): Promise<{ text: string; streamError: string; thread: AiThread | null }> {
   const reader = upstream.getReader();
   const decoder = new TextDecoder();
@@ -236,11 +247,17 @@ async function forwardSse(
           const j = JSON.parse(data) as {
             error?: string | { message?: string };
             thread?: AiThread;
+            control?: string;
             choices?: { delta?: { content?: string } }[];
           };
           if (j.error) {
             streamError =
               typeof j.error === "string" ? j.error : j.error.message ?? "";
+            continue;
+          }
+          if (j.control === "reset") {
+            text = "";
+            onReset?.();
             continue;
           }
           if (j.thread) {
@@ -288,6 +305,64 @@ function stripMarkers(
     modeSink,
   );
   return stripPlanMarkers(base, planSink);
+}
+
+const MARKER_NAMES = [
+  "read",
+  "write",
+  "mkdir",
+  "mood",
+  "mode",
+  "plan",
+  "files",
+  "end",
+];
+const MARKER_TAIL_MAX = 200;
+
+/** True kalau `tail` bisa jadi awal marker Lode (mis. "@@mo", "@@read(\"a"). */
+function looksLikeMarker(tail: string): boolean {
+  const m = /^@@([a-z]*)/i.exec(tail);
+  if (!m) return false;
+  const name = m[1];
+  if (!name) return true;
+  return MARKER_NAMES.some((n) => n.startsWith(name) || name.startsWith(n));
+}
+
+/**
+ * Strip marker Lode dari delta streaming. Panjang marker bisa melebihi satu
+ * chunk, jadi potongan ekor yang masih mungkin jadi awal marker ditahan dulu
+ * supaya tidak pernah bocor mentah ke layar. `flush()` mengembalikan sisa
+ * yang ditahan saat stream selesai.
+ */
+function createMarkerStripper(
+  planSink?: Map<number, PlanStatus>,
+  modeSink?: Map<LearnMode, LearnMode>,
+): { feed: (delta: string) => string; flush: () => string; reset: () => void } {
+  let hold = "";
+  const splitTail = (t: string): { emit: string; hold: string } => {
+    const at = t.lastIndexOf("@@");
+    if (at === -1) return { emit: t, hold: "" };
+    const tail = t.slice(at);
+    if (tail.length > MARKER_TAIL_MAX) return { emit: t, hold: "" };
+    if (!looksLikeMarker(tail)) return { emit: t, hold: "" };
+    if (tail.includes(")")) return { emit: t, hold: "" }; // marker sudah tutup
+    return { emit: t.slice(0, at), hold: tail };
+  };
+  return {
+    feed(delta: string): string {
+      const { emit, hold: next } = splitTail(hold + delta);
+      hold = next;
+      return stripMarkers(emit, planSink, modeSink);
+    },
+    flush(): string {
+      const rest = hold;
+      hold = "";
+      return stripMarkers(rest, planSink, modeSink);
+    },
+    reset(): void {
+      hold = "";
+    },
+  };
 }
 
 function effectiveModeFor(
@@ -492,7 +567,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       try {
         authoredCtx = await buildAuthoredFilesContext(
           folder,
-          records.map((r) => r.rel),
+          records.map((r: any) => r.rel),
         );
       } catch {
         authoredCtx = "";
@@ -500,7 +575,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     const planItems = listPlanItems(cid);
-    const planIds = new Set(planItems.map((i) => i.id));
+    const planIds = new Set(planItems.map((i: any) => i.id));
 
     const system = buildSystemPrompt(
       profile,
@@ -588,6 +663,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       mode: "collect" | "stream";
       markers: Set<string>;
       thread: AiThread | null;
+      committed: boolean;
     }> =>
       new Promise((resolve, reject) => {
         const reader = up.getReader();
@@ -597,16 +673,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         let streamError = "";
         let mode: "collect" | "stream" = "collect";
         let thread: AiThread | null = null;
+        // true begitu ada byte jawaban yang keluar ke klien. Setelah itu
+        // jawaban round 1 dianggap final dan TIDAK BOLEH diulang lewat round 2.
+        let committed = false;
         const markers = new Set<string>();
         const detectMarkers = (txt: string) => {
           let m: RegExpExecArray | null;
           const re = /@@read\("([^"]+)"\)/g;
           while ((m = re.exec(txt))) markers.add(m[1]);
         };
-        const stripMarkersAndTokens = (txt: string) => stripMarkers(txt, planSink, modeSink);
         const run = async () => {
           try {
             const flt = makeWriteFilter();
+            const strip = createMarkerStripper(planSink, modeSink);
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
@@ -622,6 +701,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
                   const j = JSON.parse(data) as {
                     error?: string | { message?: string };
                     thread?: AiThread;
+                    control?: string;
                     choices?: { delta?: { content?: string } }[];
                   };
                   if (j.error) {
@@ -631,6 +711,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
                         : j.error.message ?? "Unknown";
                     continue;
                   }
+                  if (j.control === "reset") {
+                    // Gemini mengulang jawaban dari awal — buang isi lama
+                    // supaya tidak tampil dua kali.
+                    full = "";
+                    markers.clear();
+                    flt.reset();
+                    strip.reset();
+                    if (!res.writableEnded) res.write("\n@@reset\n");
+                    continue;
+                  }
                   if (j.thread) {
                     thread = j.thread;
                     continue;
@@ -638,17 +728,24 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
                   const delta = j.choices?.[0]?.delta?.content ?? "";
                   if (!delta) continue;
                   full += delta;
-                  detectMarkers(full);
 
-                  if (mode === "collect") {
-                    if (markers.size > 0) {
-                      mode = "collect"; // ada permintaan baca file → siapkan round 2
-                    } else if (full.length >= 1024 || /\n\n/.test(full)) {
-                      mode = "stream"; // aman, mulai streaming
-                      res.write(flt.fed(stripMarkersAndTokens(full)));
-                    }
-                  } else {
-                    res.write(flt.fed(stripMarkersAndTokens(delta)));
+                  if (mode === "stream") {
+                    res.write(flt.fed(strip.feed(delta)));
+                    continue;
+                  }
+
+                  // Hanya boleh deteksi marker SEBELUM jawaban dikirim. Kalau
+                  // marker @@read muncul setelah teks sudah keluar ke layar,
+                  // memaksa round 2 akan membuat Lode menjawab pertanyaan yang
+                  // sama dua kali.
+                  detectMarkers(full);
+                  if (markers.size > 0) {
+                    continue; // tahan jawaban, siapkan round 2
+                  }
+                  if (full.length >= 1024 || /\n\n/.test(full)) {
+                    mode = "stream"; // aman, mulai streaming
+                    committed = true;
+                    res.write(flt.fed(strip.feed(full)));
                   }
                 } catch {
                   // baris SSE tidak lengkap / bukan JSON
@@ -656,12 +753,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
               }
             }
             if (mode === "stream" && !res.writableEnded) {
+              res.write(flt.fed(strip.flush()));
               res.write(flt.end());
             }
-            resolve({ full, streamError, mode, markers, thread });
+            resolve({ full, streamError, mode, markers, thread, committed });
           } catch (err) {
             streamError = err instanceof Error ? err.message : "Stream terputus";
-            resolve({ full, streamError, mode, markers, thread });
+            resolve({ full, streamError, mode, markers, thread, committed });
           } finally {
             try {
               reader.releaseLock();
@@ -710,7 +808,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     let finalText = stripMarkers(parsed.clean, planSink, modeSink).trim();
 
-    if (round1.markers.size > 0) {
+    // Round 2 hanya aman kalau jawaban round 1 belum sempat keluar ke layar.
+    if (round1.markers.size > 0 && !round1.committed) {
       const rels = [...round1.markers];
       let dump = "";
       if (folder) {
@@ -728,11 +827,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           clientAbort.signal,
         );
         const r2f = makeWriteFilter();
-        const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink)));
-        });
+        const r2s = createMarkerStripper(planSink, modeSink);
+        const r2 = await forwardSse(
+          round2,
+          (d) => {
+            if (!res.writableEnded) res.write(r2f.fed(r2s.feed(d)));
+          },
+          () => {
+            r2f.reset();
+            r2s.reset();
+            if (!res.writableEnded) res.write("\n@@reset\n");
+          },
+        );
         if (r2.thread) r1thread = r2.thread;
-        if (!res.writableEnded) res.write(r2f.end());
+        if (!res.writableEnded) res.write(r2f.fed(r2s.flush()) + r2f.end());
         const r2Parsed = parseAgentBlocks(r2.text);
         if (folder && allowWrite && (r2Parsed.writes.length || r2Parsed.mkdirs.length)) {
           const results = await applyWorkspaceWrites(folder, r2Parsed);
@@ -787,11 +895,20 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           clientAbort.signal,
         );
         const r2f = makeWriteFilter();
-        const r2 = await forwardSse(round2, (d) => {
-          if (!res.writableEnded) res.write(r2f.fed(stripMarkers(d, planSink, modeSink)));
-        });
+        const r2s = createMarkerStripper(planSink, modeSink);
+        const r2 = await forwardSse(
+          round2,
+          (d) => {
+            if (!res.writableEnded) res.write(r2f.fed(r2s.feed(d)));
+          },
+          () => {
+            r2f.reset();
+            r2s.reset();
+            if (!res.writableEnded) res.write("\n@@reset\n");
+          },
+        );
         if (r2.thread) r1thread = r2.thread;
-        if (!res.writableEnded) res.write(r2f.end());
+        if (!res.writableEnded) res.write(r2f.fed(r2s.flush()) + r2f.end());
         const r2p = parseAgentBlocks(r2.text);
         if (r2p.writes.length || r2p.mkdirs.length) {
           const results = await applyWorkspaceWrites(folder, r2p);
@@ -851,6 +968,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     } else {
       for (const [pid, status] of planUpdates) {
         patchPlanItem(pid, { status });
+      }
+      // Jangan tutup percakapan dengan sunyi: kalau upstream tidak mengirim
+      // apa pun (mis. stream terputus setelah reset), user harus tahu.
+      if (!finalText && fileWrites === 0) {
+        writeAiError(res, "Lode tidak menghasilkan jawaban. Silakan kirim ulang pesan.");
       }
     }
 
@@ -1050,6 +1172,49 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       return sendJson(res, 200, { ok: true });
     }
+  }
+
+  // ---------- conversation export/import/fork ----------
+  const convExportMatch = p.match(/^\/api\/conversations\/(\d+)\/export$/);
+  if (convExportMatch && method === "GET") {
+    const cid = Number(convExportMatch[1]);
+    const base = exportConversationContext(cid);
+    if (!base) return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    const folder = String(base.conversation.folder || "").trim();
+    if (folder) {
+      try {
+        const rels = base.workspace_files.map((r) => r.rel);
+        const files: Array<{ rel: string; content: string | null; updated_at?: string }> = [];
+        for (const r of rels.slice(0, 500)) {
+          const rf = await readWorkspaceFile(folder, r, 256000);
+          files.push({ rel: r, content: rf?.content ?? null, updated_at: undefined });
+        }
+        base.workspace_files = files;
+      } catch {}
+    }
+    return sendJson(res, 200, base);
+  }
+  const convForkMatch = p.match(/^\/api\/conversations\/(\d+)\/fork$/);
+  if (convForkMatch && method === "POST") {
+    const cid = Number(convForkMatch[1]);
+    const base = exportConversationContext(cid);
+    if (!base) return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    const resImport = importConversationContext(base);
+    return sendJson(res, 200, { id: resImport.id, warnings: resImport.warnings });
+  }
+  if (p === "/api/conversations/import" && method === "POST") {
+    const raw = await readBody(req, 25_000_000);
+    let input: ConversationExportPayload;
+    try {
+      input = JSON.parse(raw) as ConversationExportPayload;
+    } catch {
+      return sendJson(res, 400, { error: "Format JSON tidak valid" });
+    }
+    if (input?.format !== "lode-conversation" || input?.version !== 1) {
+      return sendJson(res, 400, { error: "Format ekspor tidak dikenali" });
+    }
+    const resImport = importConversationContext(input);
+    return sendJson(res, 200, { id: resImport.id, warnings: resImport.warnings });
   }
 
   // ---------- topics ----------

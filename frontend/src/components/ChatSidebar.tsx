@@ -10,6 +10,9 @@ interface Props {
   onNewChat: () => void;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
+  onFork?: (id: number) => void;
+  onExport?: (id: number) => void;
+  onImport?: (file: File) => void;
 }
 
 function SectionTitle({ children }: { children: string }) {
@@ -29,6 +32,9 @@ export default function ChatSidebar({
   onNewChat,
   onSelect,
   onDelete,
+  onFork = () => {},
+  onExport = () => {},
+  onImport = () => {},
 }: Props) {
   return (
     <aside
@@ -64,6 +70,23 @@ export default function ChatSidebar({
         </button>
       </div>
 
+        <button
+          onClick={() => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".json,application/json";
+            input.onchange = (e) => {
+              const f = (e.target as HTMLInputElement).files?.[0];
+              if (f) onImport(f);
+              input.remove();
+            };
+            input.click();
+          }}
+          className="mt-2 w-full rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold text-night transition hover:bg-white/15"
+        >
+          Impor konteks
+        </button>
+
       <div className="flex-1 overflow-y-auto px-3 py-4">
         <section>
           <SectionTitle>Percakapan</SectionTitle>
@@ -98,6 +121,26 @@ export default function ChatSidebar({
                         {c.folder ? " • " + c.folder.split("/").pop() : ""}
                       </span>
                     </button>
+                    {onFork && (
+                      <button
+                        onClick={() => onFork(c.id)}
+                        className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-mew"
+                        aria-label="Lanjutkan di chat baru"
+                        title="Lanjutkan di chat baru"
+                      >
+                        ⟶
+                      </button>
+                    )}
+                    {onExport && (
+                      <button
+                        onClick={() => onExport(c.id)}
+                        className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-kirimochi"
+                        aria-label="Ekspor konteks"
+                        title="Ekspor konteks"
+                      >
+                        ⤓
+                      </button>
+                    )}
                     <button
                       onClick={() => onDelete(c.id)}
                       className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-sakura"
