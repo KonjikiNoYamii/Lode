@@ -10,10 +10,7 @@ interface Props {
   onNewChat: () => void;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
-  onFork?: (id: number) => void;
-  onExport?: (id: number) => void;
   onImport?: (file: File) => void;
-  onForkClean?: (id: number) => void;
 }
 
 function SectionTitle({ children }: { children: string }) {
@@ -33,10 +30,7 @@ export default function ChatSidebar({
   onNewChat,
   onSelect,
   onDelete,
-  onFork = () => {},
-  onExport = () => {},
   onImport = () => {},
-  onForkClean = () => {},
 }: Props) {
   return (
     <aside
@@ -123,36 +117,6 @@ export default function ChatSidebar({
                         {c.folder ? " • " + c.folder.split("/").pop() : ""}
                       </span>
                     </button>
-                    {onFork && (
-                      <button
-                        onClick={() => onFork(c.id)}
-                        className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-mew"
-                        aria-label="Lanjutkan di chat baru (terbawa semua)"
-                        title="Lanjutkan di chat baru (terbawa semua)"
-                      >
-                        ⟶
-                      </button>
-                    )}
-                    {onForkClean && (
-                      <button
-                        onClick={() => onForkClean(c.id)}
-                        className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-mew/80"
-                        aria-label="Mulai sesi baru dari konteks ini (pesan lama dihapus)"
-                        title="Mulai sesi baru dari konteks ini (pesan lama dihapus)"
-                      >
-                        ✦
-                      </button>
-                    )}
-                    {onExport && (
-                      <button
-                        onClick={() => onExport(c.id)}
-                        className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-kirimochi"
-                        aria-label="Ekspor konteks"
-                        title="Ekspor konteks"
-                      >
-                        ⤓
-                      </button>
-                    )}
                     <button
                       onClick={() => onDelete(c.id)}
                       className="shrink-0 rounded-full px-1.5 text-xs text-mist opacity-0 transition group-hover:opacity-100 hover:text-sakura"

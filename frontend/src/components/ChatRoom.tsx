@@ -161,6 +161,9 @@ interface Props {
   onNewChat: () => void;
   onOpenSidebar: () => void;
   onSetFolder: (folder: string) => Promise<void>;
+  onFork?: (id: number) => void;
+  onForkClean?: (id: number) => void;
+  onExport?: (id: number) => void;
 }
 
 const SUGGESTIONS = [
@@ -288,6 +291,9 @@ export default function ChatRoom({
   onNewChat,
   onOpenSidebar,
   onSetFolder,
+  onFork,
+  onForkClean,
+  onExport,
 }: Props) {
   const [sending, setSending] = useState(false);
   const [live, setLive] = useState("");
@@ -300,16 +306,38 @@ export default function ChatRoom({
   const [folderChecking, setFolderChecking] = useState(false);
   const [folderSaving, setFolderSaving] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [mood, setMood] = useState<Mood>("netral");
   const [filter, setFilter] = useState<"all" | TopicStatus>("all");
   const [showAllTopics, setShowAllTopics] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef<HTMLTextAreaElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const prevLastMsgIdRef = useRef<number | undefined>(undefined);
   const activeRequestRef = useRef<AbortController | null>(null);
   const preservedErrorRef = useRef("");
   const currentIdRef = useRef(currentId);
   currentIdRef.current = currentId;
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [currentId]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDocDown);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocDown);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [menuOpen]);
 
   const mascotName = profile?.mascot || "Lode";
 
@@ -649,6 +677,65 @@ export default function ChatRoom({
         >
           Baru
         </button>
+        {currentId != null && (onFork || onForkClean || onExport) && (
+          <div className="relative" ref={menuRef}>
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              className="rounded-full border border-white/10 px-3 py-1.5 text-xs font-bold text-mist transition hover:text-night"
+              aria-label="Aksi percakapan"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              ⋯
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                className="absolute right-0 z-30 mt-2 w-60 overflow-hidden rounded-xl border border-white/10 bg-panel2 shadow-2xl"
+              >
+                {onFork && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onFork(currentId);
+                    }}
+                    className="flex w-full flex-col gap-0.5 px-4 py-2.5 text-left transition hover:bg-white/10"
+                  >
+                    <span className="text-xs font-bold text-night">Lanjutkan di chat baru</span>
+                    <span className="text-[10px] text-mist">Semua pesan & konteks ikut</span>
+                  </button>
+                )}
+                {onForkClean && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onForkClean(currentId);
+                    }}
+                    className="flex w-full flex-col gap-0.5 px-4 py-2.5 text-left transition hover:bg-white/10"
+                  >
+                    <span className="text-xs font-bold text-night">Sesi baru (bersih)</span>
+                    <span className="text-[10px] text-mist">Konteks ikut, pesan lama dibuang</span>
+                  </button>
+                )}
+                {onExport && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onExport(currentId);
+                    }}
+                    className="flex w-full flex-col gap-0.5 px-4 py-2.5 text-left transition hover:bg-white/10"
+                  >
+                    <span className="text-xs font-bold text-night">Ekspor konteks</span>
+                    <span className="text-[10px] text-mist">Unduh percakapan sebagai JSON</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* modal folder workspace */}

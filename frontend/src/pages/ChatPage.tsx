@@ -95,7 +95,9 @@ export default function ChatPage() {
   }, []);
 
   const loadConversation = useCallback(
-    async (id: number) => {
+    async (id: number): Promise<boolean> => {
+      setMessages([]);
+      setTotalMessages(0);
       try {
         const data = await get<{
           messages: Message[];
@@ -111,8 +113,13 @@ export default function ChatPage() {
         setSideOpen(false);
         rememberConversation(id);
         await refresh(id);
+        return true;
       } catch {
+        setCurrentId(null);
+        setTotalMessages(0);
         rememberConversation(null);
+        await refresh(null);
+        return false;
       }
     },
     [refresh],
@@ -214,14 +221,9 @@ export default function ChatPage() {
   const handleFork = async (id: number) => {
     try {
       const r = await forkConversation(id);
-      if (r.id) {
-        localStorage.setItem("lastConversationId", String(r.id));
-        setCurrentId(r.id);
-        // force fresh load
-        await loadConversation(r.id);
-        await refresh(r.id);
-        setSideOpen(false);
-      }
+      if (!r.id) return;
+      const ok = await loadConversation(r.id);
+      if (!ok) alert("Fork berhasil dibuat, tapi gagal memuatnya. Coba pilih dari daftar percakapan.");
     } catch (e) {
       alert(e instanceof Error ? e.message : "Gagal fork");
     }
@@ -230,13 +232,13 @@ export default function ChatPage() {
   const handleForkClean = async (id: number) => {
     try {
       const r = await forkCleanConversation(id);
-      if (r.id) {
-        localStorage.setItem("lastConversationId", String(r.id));
-        setCurrentId(r.id);
-        // force fresh load
-        await loadConversation(r.id);
-        await refresh(r.id);
-        setSideOpen(false);
+      if (!r.id) return;
+      const ok = await loadConversation(r.id);
+      if (!ok) {
+        alert("Sesi baru berhasil dibuat, tapi gagal memuatnya. Coba pilih dari daftar percakapan.");
+      }
+      if (r.warnings && r.warnings.length > 0) {
+        alert(r.warnings.join("\n"));
       }
     } catch (e) {
       alert(e instanceof Error ? e.message : "Gagal fork bersih");
@@ -260,8 +262,6 @@ export default function ChatPage() {
         onNewChat={newChat}
         onSelect={loadConversation}
         onDelete={removeConversation}
-        onFork={handleFork}
-        onExport={handleExport}
         onImport={handleImport}
       />
 
@@ -290,6 +290,9 @@ export default function ChatPage() {
         onNewChat={newChat}
         onOpenSidebar={() => setSideOpen(true)}
         onSetFolder={setFolder}
+        onFork={handleFork}
+        onForkClean={handleForkClean}
+        onExport={handleExport}
       />
     </div>
   );
@@ -318,7 +321,7 @@ export default function ChatPage() {
       const payload = JSON.parse(txt);
       const r = await importConversation(payload);
       if (r.id) {
-        localStorage.setItem("lastConversationId", String(r.id));
+        rememberConversation(r.id);
         window.location.reload();
       }
       if (r.warnings && r.warnings.length > 0) {
