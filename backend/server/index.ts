@@ -993,6 +993,56 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
     }
 
+    // Guard kedua: Gemini kadang menulis jawaban benar dulu lalu menimpanya
+    // dengan penolakan (streaming sudah terlanjur tampil, jadi round1.committed
+    // true dan guard pertama terlewat). Ulangi sekali dan suruh klien membuang
+    // teks refusal lewat marker reset.
+    if (finalText && looksLikeRefusal(finalText) && !clientAbort.signal.aborted) {
+      try {
+        const retryUpstream = await streamChat(
+          round1Payload(),
+          r1thread,
+          resumeSession,
+          clientAbort.signal,
+        );
+        if (!res.writableEnded) res.write("\n@@reset\n");
+        const rf = makeWriteFilter();
+        const rs = createMarkerStripper(planSink, modeSink);
+        const rr = await forwardSse(
+          retryUpstream,
+          (d) => {
+            if (!res.writableEnded) res.write(rf.fed(rs.feed(d)));
+          },
+          () => {
+            rf.reset();
+            rs.reset();
+            if (!res.writableEnded) res.write("\n@@reset\n");
+          },
+        );
+        if (!res.writableEnded) res.write(rf.fed(rs.flush()) + rf.end());
+        if (rr.thread) r1thread = rr.thread;
+        if (rr.streamError) providerError = rr.streamError;
+        const retryParsed = parseAgentBlocks(rr.text);
+        if (retryParsed.clean.trim() && !looksLikeRefusal(retryParsed.clean)) {
+          finalText = stripMarkers(retryParsed.clean, planSink, modeSink).trim();
+          if (folder && allowWrite && (retryParsed.writes.length || retryParsed.mkdirs.length)) {
+            const results = await applyWorkspaceWrites(folder, retryParsed);
+            const ok = results.filter((r) => !r.error && !r.rel.endsWith("/"));
+            for (const r of ok) upsertWorkspaceFile(cid, r.rel);
+            fileWrites += recordFileWrites(cid, results);
+          }
+        } else {
+          if (!res.writableEnded) res.write("\n@@reset\n");
+          if (!providerError) {
+            providerError =
+              "Model AI menolak menjawab permintaan itu. Silakan ubah sedikit pertanyaannya lalu kirim ulang.";
+          }
+        }
+      } catch (err) {
+        providerError = err instanceof Error ? err.message : "Ulangi jawaban gagal";
+      }
+    }
+
     if (clientAbort.signal.aborted) {
       if (!res.writableEnded) res.end();
       return;
