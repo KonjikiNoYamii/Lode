@@ -101,6 +101,26 @@ const MIME: Record<string, string> = {
 
 const READ_MARKER = /@@read\("([^"]+)"\)/g;
 
+// Kadang provider (Gemini) keluar dengan penolakan template seperti "Saya hanya
+// model bahasa" alih-alih menjawab sebagai mentor. Itu bukan jawaban valid:
+// jangan ditampilkan/di-simpan, ulangi sekali.
+const REFUSAL_PATTERNS = [
+  /hanya (sebuah )?model bahasa/i,
+  /cuma (sebuah )?model bahasa/i,
+  /tidak dirancang untuk (itu|hal tersebut|hal ini)/i,
+  /tidak diprogram untuk (itu|hal tersebut|hal ini|melakukan)/i,
+  /saya tidak (bisa|dapat) (membantu|memahami|merespons)/i,
+  /saya (bukan|hanya) (asisten|ai|kecerdasan buatan)/i,
+  /\b(i am|i'm) (just )?(a|an) (language )?(model|ai)\b/i,
+  /\bas an? (ai|language model)\b/i,
+];
+
+function looksLikeRefusal(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0 || t.length > 400) return false;
+  return REFUSAL_PATTERNS.some((re) => re.test(t));
+}
+
 function makeWriteFilter(): {
   fed: (delta: string) => string;
   end: () => string;
@@ -776,7 +796,48 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (round1.thread) r1thread = round1.thread;
     let providerError = round1.streamError;
 
-    const parsed = parseAgentBlocks(round1.full);
+    let parsed = parseAgentBlocks(round1.full);
+
+    // Guard penolakan provider: hanya berlaku kalau jawaban belum terkirim ke
+    // klien (mode collect) dan belum ada marker aktivitas. Ulangi sekali dengan
+    // payload yang sama; kalau tetap menolak, laporkan sebagai error.
+    if (
+      !round1.committed &&
+      round1.markers.size === 0 &&
+      !round1.streamError &&
+      !clientAbort.signal.aborted &&
+      looksLikeRefusal(parsed.clean)
+    ) {
+      try {
+        const retryUpstream = await streamChat(
+          round1Payload(),
+          r1thread,
+          resumeSession,
+          clientAbort.signal,
+        );
+        // Tahan dulu (jangan stream ke klien) supaya kalau percobaan kedua pun
+        // menolak, teks penolakan tidak sempat tampil.
+        const rr = await forwardSse(retryUpstream, () => {});
+        if (rr.thread) r1thread = rr.thread;
+        if (rr.streamError) providerError = rr.streamError;
+        const retryParsed = parseAgentBlocks(rr.text);
+        if (retryParsed.clean.trim() && !looksLikeRefusal(retryParsed.clean)) {
+          parsed = retryParsed;
+          round1.full = rr.text;
+          round1.mode = "stream";
+          round1.committed = true;
+          if (!res.writableEnded) {
+            res.write(stripMarkers(retryParsed.clean, planSink, modeSink));
+          }
+        }
+      } catch (err) {
+        providerError = err instanceof Error ? err.message : "Ulangi jawaban gagal";
+      }
+      if (!providerError && looksLikeRefusal(parsed.clean)) {
+        providerError =
+          "Model AI menolak menjawab permintaan itu. Silakan ubah sedikit pertanyaannya lalu kirim ulang.";
+      }
+    }
 
     let writeNotes = "";
     let fileWrites = 0;
