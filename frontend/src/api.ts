@@ -67,3 +67,23 @@ export async function forkCleanConversation(id: number): Promise<{ id: number; w
   }
   return r.json() as Promise<{ id: number; warnings?: string[] }>;
 }
+
+export interface MakeNoteResult {
+  ok: boolean;
+  files: string[];
+  error?: string;
+}
+
+export async function makeNote(conversationId: number, messageId: number): Promise<MakeNoteResult> {
+  const r = await fetch("/api/notes/make", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId, messageId }),
+  });
+  if (!r.ok) {
+    let msg = "";
+    try { const j = (await r.json()) as { error?: string; detail?: string }; msg = j.error ?? ""; if (j.detail) msg += ` (${j.detail})`; } catch {}
+    throw new Error(msg || `Gagal membuat catatan (${r.status})`);
+  }
+  return r.json() as Promise<MakeNoteResult>;
+}

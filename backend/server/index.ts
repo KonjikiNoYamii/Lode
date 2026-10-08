@@ -15,6 +15,7 @@ import {
   deleteTopic,
   getConversation,
   getFileRevision,
+  getMessage,
   getProfile,
   getTopic,
   listConversations,
@@ -63,6 +64,7 @@ import {
   buildSystemPrompt,
   parseMemoryUpdate,
 } from "../lib/memory";
+import { buildNotePrompt } from "../lib/notes";
 import {
   applyWorkspaceWrites,
   buildAuthoredFilesContext,
@@ -1588,6 +1590,91 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       summary: text,
       topics: listTopicsByConversation(cid),
       memories: listMemoriesByConversation(cid),
+    });
+  }
+
+  // ---------- POST /api/notes/make (dadakan: ubah satu output mentor jadi berkas catatan) ----------
+  if (method === "POST" && p === "/api/notes/make") {
+    const body = await readJson(req);
+    const cid = Number(body.conversationId) || 0;
+    const mid = Number(body.messageId) || 0;
+    if (!cid || !mid) {
+      return sendJson(res, 400, { error: "conversationId & messageId diperlukan" });
+    }
+    const conv = getConversation(cid);
+    if (!conv) {
+      return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    }
+    const msg = getMessage(mid);
+    if (!msg || msg.role !== "assistant") {
+      return sendJson(res, 404, { error: "Pesan mentor tidak ditemukan" });
+    }
+
+    const folder = String(conv.folder ?? "").trim();
+    if (!folder) {
+      return sendJson(res, 400, {
+        error:
+          "Folder workspace belum diarahkan ke percakapan ini. Set folder dulu lewat tombol Folder supaya catatan bisa disimpan.",
+      });
+    }
+    const profile = getProfile();
+    if (profile.ws_allow_write === 0) {
+      return sendJson(res, 400, {
+        error: "Izin menulis Lode nonaktif di Settings — nyalakan supaya catatan bisa disimpan.",
+      });
+    }
+
+    const chatTurn = beginChatTurn();
+    await chatTurn.ready;
+    if (res.destroyed) {
+      chatTurn.release();
+      return;
+    }
+    res.once("finish", chatTurn.release);
+    res.once("close", chatTurn.release);
+
+    const workspaceCtx = await buildWorkspaceContext(folder, {
+      maxDepth: clampInt(profile.ws_max_depth, 1, 12, 7),
+      maxEntries: clampInt(profile.ws_max_files, 10, 3000, 350),
+      autoDumpKB: 0,
+    }).catch(() => "(folder workspace tidak bisa dibaca)");
+
+    const prompt = buildNotePrompt({ profile, output: msg.content, workspaceCtx });
+    let text: string;
+    try {
+      text = await chatText([{ role: "user", content: prompt }]);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return sendJson(res, 502, { error: "Gagal memproses catatan.", detail });
+    }
+
+    const parsed = parseAgentBlocks(text);
+    if (parsed.writes.length === 0 && parsed.mkdirs.length === 0) {
+      return sendJson(res, 200, {
+        ok: false,
+        files: [],
+        error: "AI tidak menghasilkan blok berkas catatan.",
+        raw: text.slice(0, 500),
+      });
+    }
+
+    const results = await applyWorkspaceWrites(folder, parsed);
+    const files = results.filter(
+      (r) => !r.error && !r.rel.endsWith("/") && r.next !== undefined,
+    );
+    const failed = results.filter((r) => r.error);
+    for (const r of files) upsertWorkspaceFile(cid, r.rel);
+    recordFileWrites(cid, results);
+
+    return sendJson(res, 200, {
+      ok: files.length > 0,
+      files: files.map((r) => r.rel),
+      failed: failed.map((r) => ({ rel: r.rel, error: r.error })),
+      error: files.length === 0
+        ? (failed[0]?.error ?? "Gagal menulis berkas catatan.")
+        : failed.length > 0
+          ? `${failed.length} berkas gagal ditulis.`
+          : "",
     });
   }
 

@@ -556,6 +556,13 @@ export function countMessages(conversationId: number): number {
   return row?.c ?? 0;
 }
 
+export function getMessage(messageId: number): Message | null {
+  const row = db
+    .prepare("SELECT * FROM messages WHERE id = ?")
+    .get(messageId) as Message | undefined;
+  return row ?? null;
+}
+
 export function listMessages(
   conversationId: number,
   limit?: number,

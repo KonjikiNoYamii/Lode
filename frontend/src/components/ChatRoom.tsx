@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from "react";
 import { send as apiSend } from "@/api";
+import { makeNote } from "@/api";
 import type {
   LearnMode,
   Memory,
@@ -21,7 +22,7 @@ import type {
   Topic,
   TopicStatus,
 } from "@/types";
-import { GraduationCap, BookOpen } from "lucide-react";
+import { GraduationCap, BookOpen, FileText } from "lucide-react";
 import { Markdown } from "./Markdown";
 import PlanPanel from "./PlanPanel";
 import FileHistoryPanel from "./FileHistoryPanel";
@@ -308,6 +309,10 @@ export default function ChatRoom({
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [mood, setMood] = useState<Mood>("netral");
+  const [noteBusy, setNoteBusy] = useState<Record<number, boolean>>({});
+  const [noteResult, setNoteResult] = useState<
+    Record<number, { files: string[]; error?: string }>
+  >({});
   const [filter, setFilter] = useState<"all" | TopicStatus>("all");
   const [showAllTopics, setShowAllTopics] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -403,6 +408,30 @@ export default function ChatRoom({
     setFolderText(folder);
     setFolderInfo(null);
   }, [folder]);
+
+  async function handleMakeNote(messageId: number) {
+    if (!currentId || noteBusy[messageId]) return;
+    setNoteBusy((p) => ({ ...p, [messageId]: true }));
+    setNoteResult((p) => ({ ...p, [messageId]: { files: [] } }));
+    try {
+      const r = await makeNote(currentId, messageId);
+      setNoteResult((p) => ({
+        ...p,
+        [messageId]: { files: r.files ?? [], error: r.error },
+      }));
+      if (r.files && r.files.length > 0) onRevisionsUpdated();
+    } catch (err) {
+      setNoteResult((p) => ({
+        ...p,
+        [messageId]: {
+          files: [],
+          error: err instanceof Error ? err.message : "Gagal membuat catatan",
+        },
+      }));
+    } finally {
+      setNoteBusy((p) => ({ ...p, [messageId]: false }));
+    }
+  }
 
   async function checkFolder() {
     const f = folderText.trim();
@@ -856,6 +885,32 @@ export default function ChatRoom({
                   <MiniAvatar mood={isMood(m.mood) ? m.mood : "netral"} />
                   <div className={`min-w-0 max-w-[85%] flex-1 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3 sm:max-w-[80%] msg-anim${lastId === m.id ? " msg-stagger" : ""}`}>
                     <Markdown>{m.content}</Markdown>
+                    {!live && !sending && (
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-white/5 pt-2.5">
+                        <button
+                          onClick={() => handleMakeNote(m.id)}
+                          disabled={Boolean(noteBusy[m.id])}
+                          title="Ubah output ini menjadi berkas catatan di folder workspace"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-mew/25 bg-mew/5 px-2.5 py-1 text-[11px] font-bold text-mew transition enabled:hover:bg-mew/15 enabled:active:scale-95 disabled:cursor-wait disabled:opacity-50"
+                        >
+                          <FileText className="h-3 w-3" />
+                          {noteBusy[m.id] ? "Membuat catatan…" : "Buatkan Catatan"}
+                        </button>
+                        {noteResult[m.id] && !noteBusy[m.id] && (
+                          <span
+                            className={`text-[10px] font-semibold ${
+                              noteResult[m.id].files.length > 0
+                                ? "text-kirimochi"
+                                : "text-rose-300"
+                            }`}
+                          >
+                            {noteResult[m.id].files.length > 0
+                              ? `✓ Catatan disimpan ke ${noteResult[m.id].files.join(", ")}`
+                              : `✕ ${noteResult[m.id].error || "Gagal membuat catatan"}`}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               ),
