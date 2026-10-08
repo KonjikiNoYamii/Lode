@@ -430,6 +430,34 @@ function recordFileWrites(
   return saved;
 }
 
+/** Ekstrak blok berkas @@write yang lupa ditutup @@end (atau terpotong). */
+function extractNoteWriteFromFence(
+  text: string,
+): { rel: string; content: string } | null {
+  const open = /@@write\("([^"]+)"\)\r?\n?/.exec(text);
+  if (!open) return null;
+  const rel = open[1].trim();
+  if (!rel) return null;
+  let content = text.slice(open.index + open[0].length).trim();
+  content = content.replace(/```\s*$/g, "").trim();
+  content = content.slice(0, 100_000);
+  if (!content) return null;
+  return { rel, content };
+}
+
+/** Turunkan nama file fallback dari isi catatan (ambil H1/H2 pertama). */
+function deriveFallbackNotePath(text: string): string {
+  const heading = /^#{1,2}\s+(.+)$/m.exec(text.trim());
+  let base = heading?.[1]?.trim() ?? "catatan";
+  base = base
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  if (!base) base = "catatan";
+  return `${base}.md`;
+}
+
 function summarizeRevision(rev: FileRevision) {
   const { content, ...rest } = rev;
   return { ...rest, preview: content.slice(0, 4000) };
@@ -1648,7 +1676,48 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return sendJson(res, 502, { error: "Gagal memproses catatan.", detail });
     }
 
-    const parsed = parseAgentBlocks(text);
+    let parsed = parseAgentBlocks(text);
+
+    // Kalau model tidak memakai blok @@write (mis. malah bungkus pakai fence
+    // ``` atau menjawab teks biasa), coba SEMBUHKAN:
+    // 1) ambil blok yang ada di dalam fence kode ```...
+    if (parsed.writes.length === 0 && parsed.mkdirs.length === 0) {
+      const fenced = extractNoteWriteFromFence(text);
+      if (fenced) {
+        parsed.writes.push(fenced);
+        parsed.clean = "";
+      }
+    }
+
+    // 2) retry sekali dengan instruksi super tegas supaya hanya keluarkan blok.
+    if (parsed.writes.length === 0 && parsed.mkdirs.length === 0) {
+      try {
+        const retryPrompt = [
+          "Jawabanmu TADI TIDAK memakai blok pembuatan berkas. Sekarang balas HANYA dengan SATU blok, tanpa teks lain apa pun (tanpa ```, tanpa pembuka):",
+          '@@write("path/relatif/di-folder-workspace/YangPalingMasukAkal.md")',
+          "<isi catatan lengkap>",
+          "@@end",
+        ].join("\n");
+        text = await chatText([
+          { role: "user", content: prompt },
+          { role: "assistant", content: text },
+          { role: "user", content: retryPrompt },
+        ]);
+        parsed = parseAgentBlocks(text);
+      } catch {
+        parsed = parseAgentBlocks("");
+      }
+    }
+
+    // 3) fallback terakhir: simpan teks mentah sebagai catatan di root workspace.
+    if (parsed.writes.length === 0 && parsed.mkdirs.length === 0) {
+      const clean = parsed.clean.trim() || text.trim();
+      if (clean && !looksLikeRefusal(clean)) {
+        const rel = deriveFallbackNotePath(clean);
+        parsed.writes.push({ rel, content: clean });
+      }
+    }
+
     if (parsed.writes.length === 0 && parsed.mkdirs.length === 0) {
       return sendJson(res, 200, {
         ok: false,
