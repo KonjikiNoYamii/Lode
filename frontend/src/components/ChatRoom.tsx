@@ -1065,6 +1065,11 @@ export default function ChatRoom({
                               {t.confidence > 0 ? ` · yakin ${t.confidence}%` : ""}
                             </p>
                           )}
+                          {t.status !== "mastered" && (
+                            <p className="mt-1 text-[10px] font-bold text-mew">
+                              Penguatan: {Math.min(t.strong_evidence ?? 0, 3)}/3 bukti kuat
+                            </p>
+                          )}
                         </div>
                       </li>
                     );

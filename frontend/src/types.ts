@@ -61,6 +61,7 @@ export interface Topic {
   mastery: number;
   confidence: number;
   evidence: string;
+  strong_evidence: number;
   last_reviewed_at: string;
   conversation_id: number;
   updated_at: string;
@@ -111,7 +112,7 @@ export interface ConversationExportPayload {
   exported_at: string;
   conversation: Omit<Conversation, "id" | "message_count">;
   messages: Array<Pick<Message, "role" | "content" | "mood" | "mode"> & { created_at?: string }>;
-  topics: Array<Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence"> & { updated_at?: string; last_reviewed_at?: string }>;
+  topics: Array<Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence"> & { updated_at?: string; last_reviewed_at?: string; strong_evidence?: number }>;
   memories: Array<Pick<Memory, "type" | "content"> & { created_at?: string }>;
   plan_items: Array<Pick<PlanItem, "phase" | "title" | "objective" | "prerequisites" | "status" | "order_index"> & { updated_at?: string }>;
   workspace_files: Array<{ rel: string; content: string | null; updated_at?: string }>;

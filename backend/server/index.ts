@@ -1579,6 +1579,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         mastery: t.mastery,
         confidence: t.confidence,
         evidence: t.evidence,
+        strong: t.strong,
       });
     }
     for (const m of parsed.memories) addMemory(m.type, m.content, cid);

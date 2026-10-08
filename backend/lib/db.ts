@@ -1,5 +1,10 @@
 const MASTERY_MAX_GAIN_PER_TURN = 20;
 const MASTERY_MASTERED_MIN = 60;
+/** Jumlah bukti KUAT yang wajib terkumpul sebelum materi boleh dianggap selesai. */
+export const REINFORCE_REQUIRED = 3;
+/** Batas mastery selama bukti kuat belum cukup — menahan maju paksa. */
+const MASTERY_CAP_NO_STRONG = 45;
+const MASTERY_CAP_FEW_STRONG = 59;
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, statSync } from "node:fs";
 import os from "node:os";
@@ -58,6 +63,7 @@ export interface Topic {
   mastery: number;
   confidence: number;
   evidence: string;
+  strong_evidence: number;
   last_reviewed_at: string;
   conversation_id: number;
   updated_at: string;
@@ -276,7 +282,19 @@ ensureColumn("profile", "workspace", "workspace TEXT NOT NULL DEFAULT ''");
 ensureColumn("topics", "mastery", "mastery INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "confidence", "confidence INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "evidence", "evidence TEXT NOT NULL DEFAULT ''");
+ensureColumn("topics", "strong_evidence", "strong_evidence INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "last_reviewed_at", "last_reviewed_at TEXT NOT NULL DEFAULT ''");
+
+// Penguatan: topik lama yang sudah mastered dianggap sudah punya bukti kuat penuh,
+// supaya aturan keras penguatan tidak menurunkan progres yang sudah ada.
+db.prepare(
+  `UPDATE topics SET strong_evidence = ${REINFORCE_REQUIRED}
+   WHERE status = 'mastered' AND strong_evidence < ${REINFORCE_REQUIRED}`,
+).run();
+db.prepare(
+  `UPDATE topics SET strong_evidence = 1
+   WHERE status <> 'mastered' AND strong_evidence = 0 AND TRIM(evidence) <> ''`,
+).run();
 
 // Fitur kartu review (spaced repetition) sudah dihapus. Buang sisa datanya
 // supaya tidak ada tabel yatim yang masih ikut ditulis atau di-backup.
@@ -606,7 +624,7 @@ export interface ConversationExportPayload {
     Pick<Message, "role" | "content" | "mood" | "mode"> & { created_at?: string }
   >;
   topics: Array<
-    Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence"> & {
+    Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence" | "strong_evidence"> & {
       updated_at?: string;
       last_reviewed_at?: string;
     }
@@ -635,8 +653,8 @@ export function exportConversationContext(id: number): ConversationExportPayload
     .prepare("SELECT role, content, mood, mode, created_at FROM messages WHERE conversation_id = ? ORDER BY id ASC")
     .all(id) as Array<Pick<Message, "role" | "content" | "mood" | "mode"> & { created_at: string }>;
   const topics = db
-    .prepare("SELECT name, status, notes, mastery, confidence, evidence, updated_at, last_reviewed_at FROM topics WHERE conversation_id = ? ORDER BY id ASC")
-    .all(id) as Array<Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence"> & { updated_at: string; last_reviewed_at: string }>;
+    .prepare("SELECT name, status, notes, mastery, confidence, evidence, strong_evidence, updated_at, last_reviewed_at FROM topics WHERE conversation_id = ? ORDER BY id ASC")
+    .all(id) as Array<Pick<Topic, "name" | "status" | "notes" | "mastery" | "confidence" | "evidence" | "strong_evidence"> & { updated_at: string; last_reviewed_at: string }>;
   const memories = db
     .prepare("SELECT type, content, created_at FROM memories WHERE conversation_id = ? ORDER BY id ASC")
     .all(id) as Array<Pick<Memory, "type" | "content"> & { created_at: string }>;
@@ -705,7 +723,7 @@ export function importConversationContext(input: ConversationExportPayload, opts
   }
 
   if (Array.isArray(input.topics)) {
-    const ins = db.prepare("INSERT INTO topics (name, status, notes, conversation_id, updated_at, mastery, confidence, evidence, last_reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const ins = db.prepare("INSERT INTO topics (name, status, notes, conversation_id, updated_at, mastery, confidence, evidence, strong_evidence, last_reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     for (const t of input.topics) {
       const name = String(t.name || "").trim().slice(0, 120);
       if (!name) continue;
@@ -714,10 +732,11 @@ export function importConversationContext(input: ConversationExportPayload, opts
       const evidence = String(t.evidence || "").slice(0, 300);
       const mastery = clampPercent(t.mastery, 0);
       const confidence = clampPercent(t.confidence, 0);
+      const strongEvidence = clampPercent((t as { strong_evidence?: number }).strong_evidence, 0);
       const updatedAt = t.updated_at || new Date().toISOString().replace("T", " ").slice(0, 19);
       const lastReviewedAt = t.last_reviewed_at || "";
       try {
-        ins.run(name, status, notes, newCid, updatedAt, mastery, confidence, evidence, lastReviewedAt);
+        ins.run(name, status, notes, newCid, updatedAt, mastery, confidence, evidence, strongEvidence, lastReviewedAt);
       } catch (e) {
         warnings.push(`Topik terlewat (kemungkinan duplikat nama): ${name}`);
       }
@@ -808,7 +827,7 @@ export function writeTopic(
   const requested = TOPIC_STATUSES.has(status) ? status : "learning";
   const existing = db
     .prepare(
-      `SELECT id, mastery, confidence, evidence, last_reviewed_at FROM topics
+      `SELECT id, mastery, confidence, evidence, strong_evidence, last_reviewed_at FROM topics
        WHERE name = ? COLLATE NOCASE AND conversation_id = ?`,
     )
     .get(cleanName, conversationId) as
@@ -817,6 +836,7 @@ export function writeTopic(
         mastery: number;
         confidence: number;
         evidence: string;
+        strong_evidence: number;
         last_reviewed_at: string;
       }
     | undefined;
@@ -824,20 +844,29 @@ export function writeTopic(
   const prevMastery = existing?.mastery ?? 0;
   const evidence = (extra.evidence ?? existing?.evidence ?? "").trim().slice(0, 300);
   const proposed = extra.mastery === undefined ? prevMastery : clampPercent(extra.mastery);
-  const mastery =
+  let mastery =
     proposed > prevMastery
       ? Math.min(proposed, prevMastery + MASTERY_MAX_GAIN_PER_TURN)
       : proposed;
+  // Bukti LEMAH eksplisit (jawaban pendek/tebakan) TIDAK boleh menaikkan penguasaan
+  // sebuah topik yang sudah tercatat (hanya boleh menetapkan nilai awal saat topik baru dibuat).
+  if (existing && proposed > prevMastery && extra.strong === false) mastery = prevMastery;
   const confidence =
     extra.confidence === undefined
       ? (existing?.confidence ?? 0)
       : clampPercent(extra.confidence, existing?.confidence ?? 0);
 
-  const ruled = enforceEvidenceRules(requested, mastery, evidence);
+  // Hitung bukti kuat hanya untuk bukti BARU (teks berbeda dari bukti sebelumnya).
+  const isNewEvidence =
+    evidence !== "" && extra.strong === true && evidence !== (existing?.evidence ?? "");
+  const strongEvidence = (existing?.strong_evidence ?? 0) + (isNewEvidence ? 1 : 0);
+
+  const ruled = enforceEvidenceRules(requested, mastery, evidence, strongEvidence);
 
   if (existing) {
     db.prepare(
       `UPDATE topics SET status = ?, notes = ?, mastery = ?, confidence = ?, evidence = ?,
+         strong_evidence = ?,
          last_reviewed_at = CASE WHEN ? <> '' THEN datetime('now') ELSE last_reviewed_at END,
          updated_at = datetime('now')
        WHERE id = ?`,
@@ -847,6 +876,7 @@ export function writeTopic(
       ruled.mastery,
       confidence,
       evidence,
+      strongEvidence,
       evidence,
       existing.id,
     );
@@ -855,8 +885,8 @@ export function writeTopic(
 
   const result = db
     .prepare(
-      `INSERT INTO topics (name, status, notes, mastery, confidence, evidence, last_reviewed_at, conversation_id)
-       VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? <> '' THEN datetime('now') ELSE '' END, ?)`,
+      `INSERT INTO topics (name, status, notes, mastery, confidence, evidence, strong_evidence, last_reviewed_at, conversation_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? <> '' THEN datetime('now') ELSE '' END, ?)`,
     )
     .run(
       cleanName,
@@ -865,6 +895,7 @@ export function writeTopic(
       ruled.mastery,
       confidence,
       evidence,
+      strongEvidence,
       evidence,
       conversationId,
     );
@@ -1030,10 +1061,16 @@ export function patchTopic(
 ): void {
   const current = db
     .prepare(
-      "SELECT status, mastery, confidence, evidence FROM topics WHERE id = ?",
+      "SELECT status, mastery, confidence, evidence, strong_evidence FROM topics WHERE id = ?",
     )
     .get(id) as
-    | { status: string; mastery: number; confidence: number; evidence: string }
+    | {
+        status: string;
+        mastery: number;
+        confidence: number;
+        evidence: string;
+        strong_evidence: number;
+      }
     | undefined;
   if (!current) return;
 
@@ -1073,7 +1110,12 @@ export function patchTopic(
     patch.status !== undefined && TOPIC_STATUSES.has(patch.status)
       ? patch.status
       : current.status;
-  const ruled = enforceEvidenceRules(requestedStatus, mastery, evidence);
+  const ruled = enforceEvidenceRules(
+    requestedStatus,
+    mastery,
+    evidence,
+    current.strong_evidence,
+  );
 
   keys.push("status = ?", "mastery = ?", "confidence = ?", "evidence = ?");
   values.push(ruled.status, ruled.mastery, confidence, evidence);
@@ -1109,6 +1151,8 @@ export interface TopicEvidence {
   mastery?: number;
   confidence?: number;
   evidence?: string;
+  /** Kualitas bukti dari penilaian: true = kuat (jawaban benar/praktik nyata), false/undefined = lemah. */
+  strong?: boolean;
 }
 
 export interface TopicWriteResult {
@@ -1118,17 +1162,38 @@ export interface TopicWriteResult {
   downgraded: boolean;
 }
 
-function enforceEvidenceRules(  status: string,
+function enforceEvidenceRules(
+  status: string,
   mastery: number,
   evidence: string,
+  strongEvidence: number,
 ): { status: string; mastery: number; downgraded: boolean } {
-  if (status !== "mastered") return { status, mastery, downgraded: false };
-  if (evidence && mastery >= MASTERY_MASTERED_MIN) {
-    return { status, mastery, downgraded: false };
+  let downgraded = false;
+
+  // Gerbang keras: mastery di-cap selama bukti kuat belum cukup.
+  // 0 bukti kuat → max 45, 1-2 bukti kuat → max 59 (belum boleh "tuntas").
+  const cap =
+    strongEvidence <= 0
+      ? MASTERY_CAP_NO_STRONG
+      : strongEvidence < REINFORCE_REQUIRED
+        ? MASTERY_CAP_FEW_STRONG
+        : 100;
+  if (mastery > cap) {
+    mastery = cap;
+    downgraded = true;
+  }
+
+  if (status !== "mastered") return { status, mastery, downgraded };
+  if (
+    evidence &&
+    mastery >= MASTERY_MASTERED_MIN &&
+    strongEvidence >= REINFORCE_REQUIRED
+  ) {
+    return { status, mastery, downgraded };
   }
   return {
     status: "learning",
-    mastery: evidence ? mastery : Math.min(mastery, MASTERY_MASTERED_MIN - 1),
+    mastery: Math.min(mastery, MASTERY_MASTERED_MIN - 1),
     downgraded: true,
   };
 }

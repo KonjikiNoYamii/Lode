@@ -1,4 +1,76 @@
 import type { Memory, Profile, Topic } from "./db";
+import { REINFORCE_REQUIRED } from "./db";
+
+/** Topik yang belum punya cukup bukti kuat — wajib diperkuat sebelum materi baru. */
+function pendingTopics(topics: Topic[]): Topic[] {
+  return topics
+    .filter(
+      (t) =>
+        (t.status === "learning" || t.status === "stuck") &&
+        (t.strong_evidence ?? 0) < REINFORCE_REQUIRED,
+    )
+    .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+}
+
+function buildReinforcementContext(topics: Topic[]): string {
+  const pending = pendingTopics(topics);
+  if (pending.length === 0) return "";
+
+  const active = pending[0];
+  const need = REINFORCE_REQUIRED - Math.min(active.strong_evidence ?? 0, REINFORCE_REQUIRED);
+  const lines = pending
+    .slice(0, 4)
+    .map(
+      (t) =>
+        `- [${t.status}] ${t.name} — penguatan ${Math.min(t.strong_evidence ?? 0, REINFORCE_REQUIRED)}/${REINFORCE_REQUIRED}${t.mastery ? ` (mastery ${t.mastery}%)` : ""}`,
+    )
+    .join("\n");
+
+  return [
+    "=== REINFORCEMENT WAJIB (BELUM BOLEH LANJUT MATERI BARU) ===",
+    lines,
+    "Aturan keras untuk bagian ini:",
+    `1. Topik paling atas "${active.name}" adalah topik yang paling baru kamu ajarkan — masih butuh ${need} bukti kuat lagi sebelum boleh dianggap selesai.`,
+    "2. OUTPUT SEKARANG WAJIB berurutan: (a) nilai jawaban pelajar yang terakhir dengan jujur, (b) PERKUAT topik paling atas — jelaskan lagi dari sudut/analogi/contoh yang berbeda dan perbaiki yang keliru, (c) beri 1 soal lanjutan tentang topik yang SAMA. Tetap 1 output = 1 materi + 1 soal.",
+    `3. JANGAN membuka materi BARU, JANGAN menandai topik selesai/mastered, dan JANGAN pindah ke fase roadmap berikutnya selama topik paling atas "${active.name}" belum mencapai ${REINFORCE_REQUIRED}/${REINFORCE_REQUIRED} bukti kuat. Topik lain dalam daftar tandai saja sebagai 'pending' dan jangan dilupakan, tapi tidak wajib dituntaskan sekarang.`,
+    "4. BUKTI KUAT hanya bertambah kalau pelajar membuktikan paham: menjawab soal dengan benar + alasannya, praktik/menjalankan sesuatu, atau menjelaskan kembali dengan benar. Jawaban pendek, tebakan, 'iya/paham', atau sekadar mengulang kata-katamu TIDAK dihitung sebagai bukti kuat.",
+    "",
+  ].join("\n");
+}
+
+function buildReviewContext(topics: Topic[], now = new Date()): string {
+  const due = reviewDueTopics(topics, now);
+  if (due.length === 0) return "";
+
+  const lines = due
+    .slice(0, 3)
+    .map((t) => {
+      const days = Math.floor(
+        (Date.now() - Date.parse(t.last_reviewed_at.replace(" ", "T") + "Z")) / 86_400_000,
+      );
+      return `- [mastered] ${t.name} — terakhir diperkuat ${days >= 1 ? `${days} hari lalu` : "kurang dari sehari lalu"}`;
+    })
+    .join("\n");
+
+  return [
+    "=== REVIEW BERKALA (SPACED REVIEW) ===",
+    "Topik di bawah sudah dikuasai tapi sudah lama tidak diulang. Kalau tidak ada REINFORCEMENT WAJIB di atas, SEBELUM membuka materi baru, ingatkan dan uji 1 hal dari salah satu topik ini secara singkat (1 soal recall). Jawaban benar menguatkan memori jangka panjang.",
+    lines,
+    "",
+  ].join("\n");
+}
+  function reviewDueTopics(topics: Topic[], now = new Date()): Topic[] {
+  const REVIEW_AFTER_DAYS = 3;
+  return topics
+    .filter((t) => t.status === "mastered" && t.last_reviewed_at)
+    .filter((t) => {
+      const last = Date.parse(t.last_reviewed_at.replace(" ", "T") + "Z");
+      if (!Number.isFinite(last)) return false;
+      const days = (now.getTime() - last) / 86_400_000;
+      return days >= REVIEW_AFTER_DAYS;
+    })
+    .sort((a, b) => (a.last_reviewed_at || "").localeCompare(b.last_reviewed_at || ""));
+}
 
 const LEARNING_STYLE_GUIDE: Record<string, string> = {
   praktek:
@@ -26,7 +98,7 @@ export function buildSystemPrompt(
       ? topics
           .map(
             (t) =>
-              `- [${t.status}${t.mastery ? ` ${t.mastery}%` : ""}] ${t.name}${t.notes ? ` — ${t.notes}` : ""}${t.evidence ? ` (bukti: ${t.evidence})` : ""}`,
+              `- [${t.status}${t.mastery ? ` ${t.mastery}%` : ""}] ${t.name}${t.notes ? ` — ${t.notes}` : ""}${t.evidence ? ` (bukti: ${t.evidence})` : ""}${t.status !== "mastered" ? ` (penguatan: ${Math.min(t.strong_evidence ?? 0, REINFORCE_REQUIRED)}/${REINFORCE_REQUIRED} bukti kuat)` : ""}`,
           )
           .join("\n")
       : "Belum ada catatan topik.";
@@ -51,6 +123,8 @@ export function buildSystemPrompt(
     "",
     "=== PROGRESS BELAJAR (yang TELAH dikuasai jangan dijelaskan ulang dari nol) ===",
     topicLines,
+    buildReinforcementContext(topics),
+    buildReviewContext(topics),
     "",
     "=== CATATAN MENTOR (memori jangka panjang, jangan sampai hilang) ===",
     memoryLines,
@@ -98,7 +172,7 @@ export function buildMemoryUpdatePrompt(
     ? topics
         .map(
           (t) =>
-            `{ name: "${t.name}", status: "${t.status}", mastery: ${t.mastery}, evidence: "${t.evidence}" }`,
+            `{ name: "${t.name}", status: "${t.status}", mastery: ${t.mastery}, strong_evidence: ${t.strong_evidence ?? 0}, evidence: "${t.evidence}" }`,
         )
         .join(", ")
     : "-";
@@ -133,13 +207,18 @@ export function buildMemoryUpdatePrompt(
     "   - 85-100: bisa memakai tanpa bantuan & bisa menjelaskannya ke orang lain",
     "   Jangan asal naik. Kalau pelajar cuma nodding atau belum menjawab apa-apa, jangan naikkan mastery.",
     "3. Tulis 'bukti' singkat dan KONKRET yang terlihat di percakapan ini (mis. \"menjawab benar soal dereference tanpa bantuan\"). Kalau tidak ada bukti nyata, tulis 'bukti: -' dan JANGAN tandai mastered.",
-    "4. Tulis 'yakin' 0-100 = seberapa yakin kamu pada bukti itu (bukti dari kuis/uji = tinggi, QTLintas saja = rendah).",
-    "5. Ekstrak maksimal 3 memori baru: fakta pribadi pelajar, preferensi belajar, atau insight kemajuan (tipe: fact / preference / progress / insight).",
+    `4. Klasifikasikan kualitas bukti dengan 'bobot=kuat' atau 'bobot=lemah':`,
+    `   - "kuat": pelajar BERHASIL menunjukkan pemahaman sendiri — jawaban benar atas soal + alasannya, praktik/perintah yang dijalankan dan berhasil, atau menjelaskan konsep kembali dengan benar.`,
+    `   - "lemah": pelajar cuma jawab pendek/tebakan ('502?'), mengiyakan ('iya', 'paham', 'oke'), mengulang kata mentor, atau sekadar membaca.`,
+    `   WAJIB jujur: kalau pelajar belum membuktikan apa-apa, tulis bobot=lemah. Mastery HANYA boleh naik kalau ada bukti bobot=kuat.`,
+    `5. Sistem memberlakukan aturan PENGUATAN BERKALA: satu topik baru dianggap selesai hanya setelah minimal ${REINFORCE_REQUIRED} bukti KUALITAS KUAT yang berbeda terkumpul. Sampai itu, tahan status topik di 'learning' dan ajukan lagi untuk diperkuat — JANGAN menandai mastered hanya dari satu jawaban singkat.`,
+    "6. Tulis 'yakin' 0-100 = seberapa yakin kamu pada bukti itu (bukti dari kuis/uji = tinggi, QTLintas saja = rendah).",
+    "7. Ekstrak maksimal 3 memori baru: fakta pribadi pelajar, preferensi belajar, atau insight kemajuan (tipe: fact / preference / progress / insight).",
     "",
     "JAWAB HANYA dengan format berikut, TANPA teks lain:",
     "TOPICS:",
-    "- [status] Nama Topik: catatan singkat satu kalimat || mastery=70 || bukti=menjawab soal tanpa bantuan || yakin=70",
-    "  (Gunakan titik dua diikuti spasi ': ' sebagai pemisah nama dan catatan. Boleh sertakan identifer teknis seperti std::cout dalam nama, selama diikuti ': ' untuk catatan. Bagian '|| mastery= || bukti= || yakin=' wajib diisi, dengan angka 0-100 dan teks singkat tanpa tanda '|'.)",
+    "- [status] Nama Topik: catatan singkat satu kalimat || mastery=70 || bukti=menjawab soal tanpa bantuan || bobot=kuat || yakin=70",
+    "  (Gunakan titik dua diikuti spasi ': ' sebagai pemisah nama dan catatan. Boleh sertakan identifer teknis seperti std::cout dalam nama, selama diikuti ': ' untuk catatan. Bagian '|| mastery= || bukti= || bobot= || yakin=' wajib diisi, dengan angka 0-100 dan teks singkat tanpa tanda '|'.)",
     "MEMORY:",
     "- [tipe] isi memori satu kalimat",
     "",
@@ -157,13 +236,15 @@ export interface ParsedTopicUpdate {
   mastery?: number;
   confidence?: number;
   evidence?: string;
+  /** Kualitas bukti: true = kuat, false = lemah, undefined = tidak disebutkan. */
+  strong?: boolean;
 }
 
 const EVIDENCE_META_RE = /\s*\|\|\s*(.*)$/;
 
 function parseEvidenceMeta(
   rest: string,
-): { note: string; mastery?: number; confidence?: number; evidence?: string } {
+): { note: string; mastery?: number; confidence?: number; evidence?: string; strong?: boolean } {
   const match = rest.match(EVIDENCE_META_RE);
   if (!match) return { note: rest.trim() };
   const note = rest.slice(0, match.index).trim();
@@ -181,11 +262,16 @@ function parseEvidenceMeta(
   };
   const evidenceRaw = fields["bukti"] ?? fields["evidence"];
   const evidence = evidenceRaw && evidenceRaw !== "-" ? evidenceRaw : undefined;
+  let strong: boolean | undefined;
+  const bobot = (fields["bobot"] ?? "").toLowerCase();
+  if (bobot === "kuat" || bobot === "strong") strong = true;
+  else if (bobot === "lemah" || bobot === "weak") strong = false;
   return {
     note,
     mastery: num("mastery"),
     confidence: num("yakin") ?? num("confidence"),
     evidence,
+    strong,
   };
 }
 
@@ -237,6 +323,7 @@ export function parseMemoryUpdate(text: string): {
           mastery: meta.mastery,
           confidence: meta.confidence,
           evidence: meta.evidence,
+          strong: meta.strong,
         });
       }
     } else if (section === "memories") {
