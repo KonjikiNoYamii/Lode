@@ -35,6 +35,7 @@ function buildReinforcementContext(topics: Topic[]): string {
     "3. JANGAN menjelaskan ulang materi dari nol. Materi lengkap sudah pernah kamu tulis di pesan sebelumnya — TIDAK BOLEH mengetik ulang definisi, analogi, atau contoh yang sudah ada. Kalau tidak ada kesalahan berarti, jangan buat-buat masalah: akui jawaban benar lalu langsung naikkan level soal.",
     `4. JANGAN membuka materi BARU, JANGAN menandai topik selesai/mastered, dan JANGAN pindah ke fase roadmap berikutnya selama topik paling atas "${active.name}" belum mencapai ${REINFORCE_REQUIRED}/${REINFORCE_REQUIRED} bukti kuat. Topik lain dalam daftar tandai saja sebagai 'pending' dan jangan dilupakan, tapi tidak wajib dituntaskan sekarang.`,
     "5. BUKTI KUAT hanya bertambah kalau pelajar membuktikan paham: menjawab soal dengan benar + alasannya, praktik/menjalankan sesuatu, atau menjelaskan kembali dengan benar. Jawaban pendek, tebakan, 'iya/paham', atau sekadar mengulang kata-katamu TIDAK dihitung sebagai bukti kuat.",
+    "6. Kalau pesan pelajar BUKAN jawaban atas soal terakhirmu (mis. bertanya, minta mengulang soal/skrip, atau melaporkan error), JANGAN menilai jawaban dan JANGAN memberi soal baru — jawab langsung pertanyaan/permintaannya, dan hanya lanjutkan giliran normal setelah pelajar memahami.",
     "",
   ].join("\n");
 }
