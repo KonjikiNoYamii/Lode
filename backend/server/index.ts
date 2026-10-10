@@ -48,6 +48,12 @@ import {
   type ChatItem,
 } from "../lib/ai";
 import { finalMood } from "../lib/mood";
+import {
+  formatNotice,
+  sanitizeStale,
+  sanitizeText,
+  validateOutput,
+} from "../lib/guardrail";
 import { buildPlanContext, stripPlanMarkers } from "../lib/plan";
 import {
   buildModeContext,
@@ -580,7 +586,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const topics = listTopicsByConversation(cid);
     const memories = listMemoriesByConversation(cid);
     const ACTIVE_CHAT_WINDOW = 50;
-    const history = listMessages(cid).slice(-ACTIVE_CHAT_WINDOW);
+    const history = sanitizeStale(listMessages(cid)).slice(-ACTIVE_CHAT_WINDOW);
 
     const conv = getConversation(cid);
     const modeChoice = chooseMode({
@@ -1095,7 +1101,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const { mood, clean: moodClean } = finalMood(finalText);
       finalText = moodClean.trim();
       if (finalText) {
-        addMessage(cid, "assistant", finalText, mood, effectiveMode);
+        // Guardrail Fase 1: jangan biarkan pesan rusak mengendap di DB.
+        // Report-only now — flags dicatat agar bisa dipantau, dampak nyata
+        // ke teks hanya perapian ringan (tutup fence, buang marker bocor).
+        const guard = validateOutput(finalText);
+        let storedText = finalText;
+        const notice = guard.ok ? "" : formatNotice(guard.flags);
+        if (!guard.ok) {
+          storedText = sanitizeText(finalText);
+          if (notice) storedText = `${storedText}${storedText.endsWith("\n") ? "" : "\n"}\n${notice}`;
+        }
+        addMessage(cid, "assistant", storedText, mood, effectiveMode);
         res.write(`\n@@mood:${mood}\n`);
         res.write(`@@mode:${effectiveMode}\n`);
         for (const [pid, status] of planUpdates) {
@@ -1104,6 +1120,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         }
         if (fileWrites > 0) {
           res.write(`@@files:${fileWrites}\n`);
+        }
+        if (!guard.ok && notice && !res.writableEnded) {
+          res.write(`\n${notice}\n`);
         }
       }
     } else {

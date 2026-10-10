@@ -7,11 +7,13 @@
     "dev": "NODE_OPTIONS='--disable-warning=ExperimentalWarning' tsx watch server/index.ts",
     "start": "node --disable-warning=ExperimentalWarning --import tsx server/index.ts",
     "ai": "bash ../gemini-server/start.sh",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
   }
 }
