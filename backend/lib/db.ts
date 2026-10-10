@@ -52,6 +52,7 @@ export interface Message {
   content: string;
   mood: string;
   mode: string;
+  client_msg_id: string | null;
   created_at: string;
 }
 
@@ -278,6 +279,11 @@ ensureColumn(
   "ai_session TEXT NOT NULL DEFAULT ''",
 );
 ensureColumn("messages", "mood", "mood TEXT NOT NULL DEFAULT ''");
+// Idempotensi kirim: ID unik dari klien mencegah baris duplikat saat kirim ganda.
+ensureColumn("messages", "client_msg_id", "client_msg_id TEXT DEFAULT NULL");
+db.exec(
+  "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_conv_clientmsg ON messages(conversation_id, client_msg_id) WHERE client_msg_id IS NOT NULL",
+);
 ensureColumn("profile", "workspace", "workspace TEXT NOT NULL DEFAULT ''");
 ensureColumn("topics", "mastery", "mastery INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "confidence", "confidence INTEGER NOT NULL DEFAULT 0");
@@ -542,10 +548,19 @@ export function addMessage(
   content: string,
   mood = "",
   mode = "",
+  clientMsgId?: string,
 ): void {
+  if (clientMsgId) {
+    const dup = db
+      .prepare(
+        "SELECT 1 FROM messages WHERE conversation_id = ? AND client_msg_id = ? LIMIT 1",
+      )
+      .get(conversationId, clientMsgId);
+    if (dup) return; // kirim ganda dengan ID yang sama → jangan duplikat
+  }
   db.prepare(
-    "INSERT INTO messages (conversation_id, role, content, mood, mode) VALUES (?, ?, ?, ?, ?)",
-  ).run(conversationId, role, content, mood, mode);
+    "INSERT INTO messages (conversation_id, role, content, mood, mode, client_msg_id) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(conversationId, role, content, mood, mode, clientMsgId ?? null);
   touchConversation(conversationId);
 }
 

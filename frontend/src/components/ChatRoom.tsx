@@ -297,6 +297,7 @@ export default function ChatRoom({
   onExport,
 }: Props) {
   const [sending, setSending] = useState(false);
+  const sendingStateRef = useRef(false);
   const [live, setLive] = useState("");
   const [error, setError] = useState("");
   const [folderOpen, setFolderOpen] = useState(false);
@@ -501,15 +502,17 @@ export default function ChatRoom({
 
   async function send(raw?: string) {
     const msg = (raw ?? "").trim();
-    if (!msg || sending) return;
+    if (!msg || sendingStateRef.current) return;
 
     const controller = new AbortController();
     activeRequestRef.current?.abort();
     activeRequestRef.current = controller;
+    sendingStateRef.current = true;
     setError("");
     setSending(true);
     setLive("");
 
+    const clientMsgId = crypto.randomUUID();
     const cidBefore = currentId;
     addMessages([
       {
@@ -533,7 +536,7 @@ export default function ChatRoom({
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, conversationId: cidBefore }),
+        body: JSON.stringify({ message: msg, conversationId: cidBefore, clientMsgId }),
         signal: controller.signal,
       });
       const cid = Number(res.headers.get("x-conversation-id")) || cidBefore || 0;
@@ -656,6 +659,7 @@ export default function ChatRoom({
     } finally {
       if (activeRequestRef.current === controller) {
         activeRequestRef.current = null;
+        sendingStateRef.current = false;
         setSending(false);
         setLive("");
         sendingRef.current?.focus();

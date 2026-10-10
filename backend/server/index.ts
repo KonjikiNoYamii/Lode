@@ -547,6 +547,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!Number.isSafeInteger(requestedCid) || requestedCid < 0) {
       return sendJson(res, 400, { error: "conversationId tidak valid" });
     }
+    const clientMsgId =
+      typeof body.clientMsgId === "string" && body.clientMsgId.trim()
+        ? body.clientMsgId.trim().slice(0, 64)
+        : "";
 
     const chatTurn = beginChatTurn();
     await chatTurn.ready;
@@ -580,7 +584,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         patchConversation(cid, { ai_session: resumeSession });
       }
     }
-    addMessage(cid, "user", message);
+    addMessage(cid, "user", message, "", "", clientMsgId || undefined);
 
     const profile = getProfile();
     const topics = listTopicsByConversation(cid);
