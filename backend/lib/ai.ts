@@ -12,30 +12,6 @@ export interface AiThread {
   metadata: string[];
 }
 
-export function parseAiThread(json: string): AiThread | null {
-  if (!json) return null;
-  try {
-    const t = JSON.parse(json) as {
-      cid?: string;
-      rid?: string;
-      rcid?: string;
-      metadata?: (string | null)[];
-    };
-    if (!t || !t.cid) return null;
-    const meta = Array.isArray(t.metadata)
-      ? t.metadata.map((x) => (x == null ? null : String(x)))
-      : [t.cid, t.rid, t.rcid];
-    return {
-      cid: String(t.cid),
-      rid: String(t.rid ?? ""),
-      rcid: String(t.rcid ?? ""),
-      metadata: meta as string[],
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function aiRequestHeaders(): Record<string, string> {
   const profile = getProfile();
   const headers: Record<string, string> = {
@@ -68,9 +44,12 @@ async function callGemini(
     method: "POST",
     headers: aiRequestHeaders(),
     body: JSON.stringify(body),
+    // Batas atas besar karena gemini-server boleh melakukan 1-2 giliran
+    // lanjutan otomatis saat jawaban terpotong, sehingga satu stream bisa
+    // berjalan lebih lama dari biasanya.
     signal: opts.signal
-      ? AbortSignal.any([opts.signal, AbortSignal.timeout(180_000)])
-      : AbortSignal.timeout(180_000),
+      ? AbortSignal.any([opts.signal, AbortSignal.timeout(360_000)])
+      : AbortSignal.timeout(360_000),
   });
 
   if (!res.ok) {

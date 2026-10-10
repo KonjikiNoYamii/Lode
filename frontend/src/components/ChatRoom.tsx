@@ -9,7 +9,7 @@ import {
   type RefObject,
 } from "react";
 import { send as apiSend } from "@/api";
-import { makeNote } from "@/api";
+import { makeNote, continueMessage } from "@/api";
 import type {
   LearnMode,
   Memory,
@@ -22,7 +22,7 @@ import type {
   Topic,
   TopicStatus,
 } from "@/types";
-import { GraduationCap, BookOpen, FileText } from "lucide-react";
+import { GraduationCap, BookOpen, FileText, RefreshCw } from "lucide-react";
 import { Markdown } from "./Markdown";
 import PlanPanel from "./PlanPanel";
 import FileHistoryPanel from "./FileHistoryPanel";
@@ -137,6 +137,23 @@ function lastMood(messages: Message[]): Mood | undefined {
   return undefined;
 }
 
+/**
+ * Gabungkan sambungan ke jawaban lama. Kalau jawaban lanjutan mengulang ekor
+ * yang sudah ada (model kadang mengulang beberapa kata terakhir), bagian yang
+ * tumpang tindih dibuang supaya tidak jadi teks ganda.
+ */
+function mergeOverlap(base: string, extra: string): string {
+  const b = (base ?? "").replace(/\r\n/g, "\n");
+  const e = (extra ?? "").replace(/\r\n/g, "\n").trim();
+  if (!e) return b;
+  if (!b) return e;
+  const max = Math.min(e.length, b.length, 400);
+  for (let k = max; k > 8; k -= 1) {
+    if (b.endsWith(e.slice(0, k))) return b + e.slice(k);
+  }
+  return b + e;
+}
+
 interface Props {
   currentId: number | null;
   title: string;
@@ -154,6 +171,7 @@ interface Props {
   totalMessages?: number;
   onLoadEarlier?: () => Promise<void>;
   addMessages: (msgs: Message[]) => void;
+  updateMessage: (id: number, content: string) => void;
   onNewConversation: (id: number, title: string) => void;
   onMemoryUpdated: (id: number) => void;
   onPlanUpdated: (plan: PlanItem[]) => void;
@@ -284,6 +302,7 @@ export default function ChatRoom({
   totalMessages = 0,
   onLoadEarlier,
   addMessages,
+  updateMessage,
   onNewConversation,
   onMemoryUpdated,
   onPlanUpdated,
@@ -314,6 +333,8 @@ export default function ChatRoom({
   const [noteResult, setNoteResult] = useState<
     Record<number, { files: string[]; error?: string }>
   >({});
+  const [continuingId, setContinuingId] = useState<number | null>(null);
+  const [continueLive, setContinueLive] = useState("");
   const [filter, setFilter] = useState<"all" | TopicStatus>("all");
   const [showAllTopics, setShowAllTopics] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -431,6 +452,41 @@ export default function ChatRoom({
       }));
     } finally {
       setNoteBusy((p) => ({ ...p, [messageId]: false }));
+    }
+  }
+
+  /** Sambung jawaban AI yang terpotong; hasilnya digabungkan ke pesan itu juga. */
+  async function handleContinue(message: Message) {
+    if (!currentId || continuingId !== null || sendingStateRef.current) return;
+    const controller = new AbortController();
+    activeRequestRef.current?.abort();
+    activeRequestRef.current = controller;
+    setContinuingId(message.id);
+    setContinueLive("");
+    setError("");
+    try {
+      const result = await continueMessage(
+        currentId,
+        message.id,
+        controller.signal,
+        (partial) => setContinueLive(partial),
+        () => setContinueLive(""),
+      );
+      if (controller.signal.aborted) return;
+      if (result.error) setError(result.error);
+      if (result.text) {
+        updateMessage(message.id, mergeOverlap(message.content, result.text));
+      }
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setError(err instanceof Error ? err.message : "Gagal menyambung jawaban");
+      }
+    } finally {
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+        setContinuingId(null);
+        setContinueLive("");
+      }
     }
   }
 
@@ -888,9 +944,21 @@ export default function ChatRoom({
                 <div key={m.id} className="flex items-start gap-2.5">
                   <MiniAvatar mood={isMood(m.mood) ? m.mood : "netral"} />
                   <div className={`min-w-0 max-w-[85%] flex-1 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3 sm:max-w-[80%] msg-anim${lastId === m.id ? " msg-stagger" : ""}`}>
-                    <Markdown>{m.content}</Markdown>
+                    <Markdown>{continuingId === m.id ? mergeOverlap(m.content, continueLive) : m.content}</Markdown>
+                    {continuingId === m.id && (
+                      <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-sakura align-middle" />
+                    )}
                     {!live && !sending && (
                       <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-white/5 pt-2.5">
+                        <button
+                          onClick={() => handleContinue(m)}
+                          disabled={continuingId !== null || Boolean(noteBusy[m.id])}
+                          title="Sambung jawaban yang terpotong tanpa mengetik ulang pertanyaan"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-akari/25 bg-akari/5 px-2.5 py-1 text-[11px] font-bold text-akari transition enabled:hover:bg-akari/15 enabled:active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <RefreshCw className={`h-3 w-3 ${continuingId === m.id ? "animate-spin" : ""}`} />
+                          {continuingId === m.id ? "Menyambung…" : "Lanjutkan"}
+                        </button>
                         <button
                           onClick={() => handleMakeNote(m.id)}
                           disabled={Boolean(noteBusy[m.id])}

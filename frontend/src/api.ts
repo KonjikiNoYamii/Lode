@@ -87,3 +87,64 @@ export async function makeNote(conversationId: number, messageId: number): Promi
   }
   return r.json() as Promise<MakeNoteResult>;
 }
+
+export interface ContinueResult {
+  text: string;
+  error: string;
+}
+
+// Stream sambungan jawaban AI untuk pesan yang terpotong. `onDelta` menerima
+// teks kumulatif dari sambungan; `onReset` dipanggil ketika backend meminta
+// pembuangan isi (Gemini menulis ulang jawaban).
+export async function continueMessage(
+  conversationId: number,
+  messageId: number,
+  signal?: AbortSignal,
+  onDelta?: (text: string) => void,
+  onReset?: () => void,
+): Promise<ContinueResult> {
+  const r = await fetch("/api/chat/continue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversationId, messageId }),
+    signal,
+  });
+  if (!r.ok) {
+    let msg = "";
+    try {
+      const j = (await r.json()) as { error?: string; detail?: string };
+      msg = j.error ?? "";
+      if (j.detail) msg += ` (${j.detail})`;
+    } catch {}
+    throw new Error(msg || `Gagal menyambung jawaban (${r.status})`);
+  }
+  if (!r.body) throw new Error("Tidak ada respons dari server.");
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  const RESET_MARKER = "\n@@reset\n";
+  let acc = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    acc += decoder.decode(value, { stream: true });
+    if (signal?.aborted) return { text: "", error: "" };
+    if (acc.includes(RESET_MARKER)) {
+      const at = acc.lastIndexOf(RESET_MARKER);
+      acc = acc.slice(at + RESET_MARKER.length);
+      onReset?.();
+    }
+    onDelta?.(acc);
+  }
+  acc += decoder.decode();
+  if (signal?.aborted) return { text: "", error: "" };
+  let error = "";
+  const withoutErrors = acc.replace(/\n?@@ai-error:([^\n]*)/g, (_match, enc: string) => {
+    try { error = decodeURIComponent(enc); } catch { error = enc; }
+    return "";
+  });
+  const text = withoutErrors
+    .replace(/\n?@@mood:[a-z]+\s*/g, "")
+    .replace(/\n?@@mode:[a-z]+\s*/g, "")
+    .trim();
+  return { text, error };
+}

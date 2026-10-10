@@ -94,6 +94,10 @@ export default function ChatPage() {
     setTotalMessages((prev) => prev + msgs.length);
   }, []);
 
+  const updateMessage = useCallback((id: number, content: string) => {
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content } : m)));
+  }, []);
+
   const loadConversation = useCallback(
     async (id: number): Promise<boolean> => {
       setMessages([]);
@@ -282,6 +286,7 @@ export default function ChatPage() {
         totalMessages={totalMessages}
         onLoadEarlier={loadEarlierMessages}
         addMessages={addMessages}
+        updateMessage={updateMessage}
         onNewConversation={onNewConversation}
         onMemoryUpdated={(id) => refresh(id)}
         onPlanUpdated={setPlan}

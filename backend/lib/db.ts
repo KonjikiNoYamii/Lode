@@ -38,7 +38,6 @@ export interface Conversation {
   folder: string;
   mode: string;
   ai_mode: string;
-  ai_thread: string;
   ai_session: string;
   created_at: string;
   updated_at: string;
@@ -429,11 +428,10 @@ export function patchConversation(
     folder?: string;
     mode?: string;
     ai_mode?: string;
-    ai_thread?: string;
     ai_session?: string;
   },
 ): void {
-  const keys = ["title", "folder", "mode", "ai_mode", "ai_thread", "ai_session"].filter(
+  const keys = ["title", "folder", "mode", "ai_mode", "ai_session"].filter(
     (k) => patch[k as keyof typeof patch] !== undefined,
   );
   if (keys.length === 0) return;
@@ -569,6 +567,41 @@ export function countMessages(conversationId: number): number {
     .prepare("SELECT COUNT(*) AS c FROM messages WHERE conversation_id = ?")
     .get(conversationId) as { c: number } | undefined;
   return row?.c ?? 0;
+}
+
+/** Gabungkan teks lanjutan ke pesan assistant yang sudah ada (tanpa pesan baru). */
+export function appendMessageContent(messageId: number, extra: string): void {
+  const add = (extra ?? "").replace(/\r\n/g, "\n").trim();
+  if (!add) return;
+  const row = db
+    .prepare("SELECT * FROM messages WHERE id = ?")
+    .get(messageId) as Message | undefined;
+  if (!row || row.role !== "assistant") return;
+  // Rapikan sambungan: kalau jawaban lanjutan mengulang ekor yang sudah ada
+  // (model kadang mengulang beberapa kata terakhir), buang bagian yang tumpang
+  // tindih supaya tidak jadi teks ganda.
+  const base = (row.content ?? "").replace(/\r\n/g, "\n");
+  const merged = mergeContinuation(base, add);
+  db.prepare("UPDATE messages SET content = ? WHERE id = ?").run(merged, messageId);
+  touchConversation(row.conversation_id);
+}
+
+/**
+ * Gabungkan `extra` ke `base`, membuang tumpang tindih ekor/awal yang identik.
+ * Sambungan teks sering mulai dengan kalimat terakhir milik jawaban lama —
+ * kalau ditempel mentah, isi jadi terulang.
+ */
+export function mergeContinuation(base: string, extra: string): string {
+  const b = base.replace(/\r\n/g, "\n");
+  const e = (extra ?? "").replace(/\r\n/g, "\n").trim();
+  if (!e) return b.trimEnd();
+  if (!b) return e;
+  // Cari potongan terpanjang di awal `extra` yang sama dengan ekor `base`.
+  const max = Math.min(e.length, b.length, 400);
+  for (let k = max; k > 8; k -= 1) {
+    if (b.endsWith(e.slice(0, k))) return `${b}${e.slice(k)}`;
+  }
+  return `${b}${e}`;
 }
 
 export function getMessage(messageId: number): Message | null {

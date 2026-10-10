@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   addMemory,
   addMessage,
+  appendMessageContent,
   countMessages,
   createConversation,
   createPlanItem,
@@ -575,9 +576,6 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
       }
       folder = String(conv.folder ?? "").trim();
-      if (String(conv.ai_thread ?? "").trim()) {
-        patchConversation(cid, { ai_thread: "" });
-      }
       resumeSession = String(conv.ai_session ?? "").trim();
       if (!resumeSession) {
         resumeSession = randomUUID();
@@ -1141,10 +1139,108 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     // Simpan thread gemini agar percakapan berlanjut tanpa mengulang riwayat.
-    if (r1thread && r1thread.cid) {
-      patchConversation(cid, { ai_thread: JSON.stringify(r1thread) });
+    // (Gateway stateless; ai_thread tidak pernah dibaca ulang — tidak disimpan.)
+
+    if (!res.writableEnded) res.end();
+    return;
+  }
+
+  // ---------- POST /api/chat/continue (sambung jawaban AI yang terpotong) ----------
+  if (method === "POST" && p === "/api/chat/continue") {
+    const body = await readJson(req);
+    const cid = Number(body.conversationId);
+    const messageId = Number(body.messageId);
+    if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(messageId)) {
+      return sendJson(res, 400, { error: "conversationId dan messageId wajib diisi" });
+    }
+    const conv = getConversation(cid);
+    if (!conv) return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    const target = getMessage(messageId);
+    if (!target || target.conversation_id !== cid || target.role !== "assistant") {
+      return sendJson(res, 400, { error: "Pesan itu bukan jawaban AI" });
+    }
+    const base = (target.content ?? "").replace(/\r\n/g, "\n").trim();
+    if (!base) return sendJson(res, 400, { error: "Jawaban kosong" });
+
+    const history = listMessages(cid).filter(
+      (m) => m.role === "user" || m.role === "assistant",
+    );
+    const targetIdx = history.findIndex((m) => m.id === messageId);
+    const upTo = history.slice(0, targetIdx + 1);
+    const tail = base.slice(-240);
+    const instruction =
+      'Jawabanmu sebelumnya terpotong di tengah karena batas panjang. Lanjutkan TEPAT dari ' +
+      "karakter terakhir jawabanmu di atas, dalam bahasa dan gaya yang sama. JANGAN mengulang, " +
+      "merangkum, atau menjelaskan ulang bagian mana pun yang sudah tertulis — materi sebelumnya " +
+      `sudah selesai dijelaskan. Jawabanmu tadi berakhir dengan: "…${tail}"\n\n` +
+      "Lanjutkan langsung dari titik itu, tanpa pembukaan ulang.";
+    const items: ChatItem[] = upTo.map((m) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content ?? "",
+    }));
+    items.push({ role: "user", content: instruction });
+
+    const headers: Record<string, string> = {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "X-Conversation-Id": String(cid),
+      "X-Message-Id": String(messageId),
+    };
+
+    const clientAbort = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) clientAbort.abort();
+    });
+
+    let upstream: ReadableStream<Uint8Array>;
+    try {
+      upstream = await streamChat(
+        items,
+        null,
+        String(conv.ai_session ?? ""),
+        clientAbort.signal,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return sendJson(
+        res,
+        502,
+        {
+          error: "Tidak bisa terhubung ke server AI untuk menyambung jawaban.",
+          detail: msg,
+        },
+        { "X-Conversation-Id": String(cid) },
+      );
     }
 
+    res.writeHead(200, headers);
+    const planSink = new Map<number, PlanStatus>();
+    const modeSink = new Map<LearnMode, LearnMode>();
+    const strip = createMarkerStripper(planSink, modeSink);
+    const r = await forwardSse(
+      upstream,
+      (d) => {
+        if (!res.writableEnded) res.write(strip.feed(d));
+      },
+      () => {
+        strip.reset();
+        if (!res.writableEnded) res.write("\n@@reset\n");
+      },
+    );
+    if (!res.writableEnded) res.write(strip.flush());
+
+    if (r.streamError) {
+      writeAiError(res, r.streamError);
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    const cleaned = stripMarkers(r.text, planSink, modeSink).trim();
+    if (!cleaned) {
+      writeAiError(res, "Lode tidak menghasilkan sambungan. Jawaban lama tetap utuh.");
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    appendMessageContent(messageId, cleaned);
     if (!res.writableEnded) res.end();
     return;
   }
