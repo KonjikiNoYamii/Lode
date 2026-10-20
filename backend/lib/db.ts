@@ -41,6 +41,12 @@ export interface Conversation {
   ai_session: string;
   /** Fase alur auto: '' = materi, 'soal' = output soal sudah diminta (menunggu lanjutan). */
   auto_phase: string;
+  /**
+   * Peta output untuk giliran panjang (materi besar dipecah banyak output).
+   * JSON: {"items":["judul bagian",...],"idx":1,"phase":"materi"|"soal"}.
+   * Kosong = tidak ada giliran panjang aktif.
+   */
+  output_plan: string;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -295,6 +301,7 @@ ensureColumn("topics", "strong_evidence", "strong_evidence INTEGER NOT NULL DEFA
 ensureColumn("topics", "last_reviewed_at", "last_reviewed_at TEXT NOT NULL DEFAULT ''");
 ensureColumn("topics", "note_rel", "note_rel TEXT NOT NULL DEFAULT ''");
 ensureColumn("conversations", "auto_phase", "auto_phase TEXT NOT NULL DEFAULT ''");
+ensureColumn("conversations", "output_plan", "output_plan TEXT NOT NULL DEFAULT ''");
 
 // Penguatan: topik lama yang sudah mastered dianggap sudah punya bukti kuat penuh,
 // supaya aturan keras penguatan tidak menurunkan progres yang sudah ada.
@@ -436,11 +443,18 @@ export function patchConversation(
     ai_mode?: string;
     ai_session?: string;
     auto_phase?: string;
+    output_plan?: string;
   },
 ): void {
-  const keys = ["title", "folder", "mode", "ai_mode", "ai_session", "auto_phase"].filter(
-    (k) => patch[k as keyof typeof patch] !== undefined,
-  );
+  const keys = [
+    "title",
+    "folder",
+    "mode",
+    "ai_mode",
+    "ai_session",
+    "auto_phase",
+    "output_plan",
+  ].filter((k) => patch[k as keyof typeof patch] !== undefined);
   if (keys.length === 0) return;
   const sets = keys.map((k) => `${k} = ?`).join(", ");
   const values = keys.map((k) => String(patch[k as keyof typeof patch] ?? ""));
