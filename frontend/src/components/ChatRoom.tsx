@@ -71,6 +71,11 @@ function isMood(v: string | undefined): v is Mood {
 function stripStreamMood(s: string): string {
   return s
     .replace(/\n?@@reset\s*/g, "")
+    // Giliran rencana (peta output): blok outline & sinyalnya tidak boleh bocor
+    // ke tampilan maupun ke pesan yang dikomit.
+    .replace(/\n?@@outline\s*\n[\s\S]*?\n?@@end\s*/g, "")
+    .replace(/\n?@@planning\s*/g, "")
+    .replace(/\n?@@planned:\d+\s*/g, "")
     .replace(/\n?@@mood:[a-z]+\s*/g, "")
     .replace(/\n?@@plan:\d+:[a-z]+\s*/g, "")
     .replace(/\n?@@files:\d+\s*/g, "")
@@ -83,7 +88,10 @@ const RESET_MARKER = "\n@@reset\n";
 // menembak /api/chat (continuePart) tanpa pelajar mengetik apa pun.
 const PART_BOUNDARY = "\n@@more\n";
 // Batas total bagian otomatis per giliran (sejalan dengan prompt mentor).
-const MAX_AUTO_PARTS = 4;
+// Cakupan besar (mis. "poin 6 sampai akhir") boleh dipecah jadi banyak output
+// berurutan; tiap bagian = satu /api/chat lanjutan, jadi jaga batas aman agar
+// tidak menunggu tanpa henti.
+const MAX_AUTO_PARTS = 12;
 
 /**
  * Buang semua teks sebelum marker reset terakhir — backend mengirimnya ketika
@@ -691,7 +699,13 @@ export default function ChatRoom({
         acc += decoder.decode(value, { stream: true });
         if (controller.signal.aborted) return acc;
         if (acc.includes(RESET_MARKER)) acc = applyStreamReset(acc);
-        setLive(stripStreamMood(acc).replace(/\n?@@ai-error:[^\n]*/g, ""));
+        const visible = stripStreamMood(acc).replace(/\n?@@ai-error:[^\n]*/g, "");
+        // Fase rencana: server sengaja mengirim peta TANPA teks materi.
+        // Tampilkan status, jangan bubble kosong / teks outline yang bocor.
+        const planning =
+          acc.includes("@@planning") &&
+          (acc.includes("@@outline") || !visible.trim());
+        setLive(planning ? "Sedang merencanakan peta belajar..." : visible);
 
         const streamMarker = acc.match(/@@mood:([a-z]+)/);
         if (streamMarker && isMood(streamMarker[1])) {
@@ -806,7 +820,17 @@ export default function ChatRoom({
           runError = result.error;
           break;
         }
+        // Giliran rencana yang SUKSES: server sudah menyimpan peta & tidak
+        // menyimpan pesan apa pun. Model kadang tetap membocorkan teks materi
+        // saat merencanakan — buang semuanya, langsung isi bagian pertama.
+        if (acc.includes("@@planning") && acc.includes("@@planned:")) {
+          setLive("");
+          hasMore = true;
+          continue;
+        }
         if (!result.text) {
+          // Peta gagal dibentuk: server menutup stream tanpa teks & tanpa
+          // konfirmasi peta. Ini bukan giliran rencana yang sah → laporkan.
           const message = "Lode tidak menghasilkan jawaban.";
           setError(message);
           runError = message;
