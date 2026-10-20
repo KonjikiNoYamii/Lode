@@ -36,8 +36,17 @@ async function callGemini(
   const body: Record<string, unknown> = { messages };
   if (opts.stream) body.stream = true;
   if (profile.ai_model) body.model = profile.ai_model;
-  if (opts.thread) body.thread = opts.thread;
-  if (opts.session) body.session = opts.session;
+  // `thread`/`session` adalah fitur tambahan khusus Gemini Server (gateway
+  // cookie). Provider OpenAI-compatible murni (Groq, OpenRouter, dsb.) menolak
+  // field tak dikenal, jadi keduanya hanya dikirim saat endpoint memang
+  // Gemini Server.
+  const isGeminiServer = /geminiserver|gemini-server|127\.0\.0\.1:8003|localhost:8003/i.test(
+    profile.ai_base_url,
+  );
+  if (isGeminiServer) {
+    if (opts.thread) body.thread = opts.thread;
+    if (opts.session) body.session = opts.session;
+  }
 
   const endpoint = `${profile.ai_base_url.replace(/\/+$/, "")}/chat/completions`;
   const res = await fetch(endpoint, {

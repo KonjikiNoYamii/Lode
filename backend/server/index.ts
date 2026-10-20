@@ -1457,13 +1457,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     async function chatProbe(): Promise<{ ok: boolean; status: number | null; body: unknown; error?: string }> {
       try {
+        const payload: Record<string, unknown> = {
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 16,
+        };
+        if (profile.ai_model) payload.model = profile.ai_model;
         const r = await fetch(`${profile.ai_base_url.replace(/\/+$/, "")}/chat/completions`, {
           method: "POST",
           headers: aiRequestHeaders(),
-          body: JSON.stringify({
-            messages: [{ role: "user", content: "ping" }],
-            max_tokens: 1,
-          }),
+          body: JSON.stringify(payload),
           signal: AbortSignal.timeout(10_000),
         });
         const body = await r.json().catch(() => null);
