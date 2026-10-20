@@ -133,7 +133,16 @@ const MODE_INSTRUCTIONS: Record<Exclude<LearnMode, "auto">, string[]> = {
 
 /** Instruksi fase MATERI di mode auto: output murni materi, soal menyusul otomatis. */
 const KONSEP_AUTO_INSTRUCTION =
-  "MODE KONSEP — FASE MATERI (sistem auto): (1) apa itu & kenapa penting, (2) cara kerjanya langkah demi langkah, (3) analogi dari kehidupan pelajar, (4) contoh konkret yang bisa dijalankan, (5) kesalahan umum. Ajarkan SATU bagian saja tiap giliran dan sambungkan dengan bagian sebelumnya; kalau masih ada bagian berikutnya, akhiri baris terakhir dengan @@more(\"judul bagian berikutnya\") (maksimal 3 bagian per giliran). PENTING: output ini MATERI MURNI — JANGAN menutup dengan soal, latihan, atau cek pemahaman, dan JANGAN memberi jawaban praktik; soal akan menyusul OTOMATIS sebagai output terpisah begitu blok materi selesai. Walaupun panduan gaya belajar menyebut 'beri latihan setelah materi', serahkan soal pada sistem.";
+  "MODE KONSEP — FASE MATERI (sistem auto): (1) apa itu & kenapa penting, (2) cara kerjanya langkah demi langkah, (3) analogi dari kehidupan pelajar, (4) contoh konkret yang bisa dijalankan, (5) kesalahan umum. Ajarkan SATU bagian saja tiap giliran dan sambungkan dengan bagian sebelumnya; kalau masih ada bagian berikutnya, akhiri baris terakhir dengan @@more(\"judul bagian berikutnya\") (maksimal 9 bagian per giliran). PENTING: output ini MATERI MURNI — JANGAN menutup dengan soal, latihan, atau cek pemahaman, dan JANGAN memberi jawaban praktik; soal akan menyusul OTOMATIS sebagai output terpisah begitu blok materi selesai. Walaupun panduan gaya belajar menyebut 'beri latihan setelah materi', serahkan soal pada sistem.";
+
+/**
+ * Penanda multi-bagian lintas mode: saat alur auto aktif di mode selain konsep,
+ * mentor juga boleh memecah pekerjaan jadi beberapa output berurutan lewat
+ * @@more. Tanpa ini, hanya mode konsep yang bisa menghasilkan rangkaian panjang;
+ * mode uji/latihan/proyek terpaksa memampatkan semuanya ke satu output pendek.
+ */
+const MULTIPART_TAIL =
+  'Kalau cakupan permintaan pelajar besar (mis. "poin 6 sampai akhir", beberapa bagian/sub-topik, atau beberapa kelompok soal), JANGAN memampatkan semuanya ke satu jawaban: kerjakan SATU bagian/sub-topik saja di output ini, lalu kalau masih ada lanjutan, akhiri baris terakhir dengan @@more("judul bagian berikutnya") supaya sistem otomatis melanjutkan ke bagian itu sebagai output terpisah (maksimal 9 bagian per giliran). Jaga kedalaman setiap bagian — lebih baik beberapa output yang tuntas daripada satu output yang dangkal.';
 
 /** Instruksi fase SOAL di mode auto (dipicu otomatis setelah blok materi). */
 const SOAL_PHASE_INSTRUCTION =
@@ -155,11 +164,14 @@ export function buildModeContext(
   if (mode === "auto") return "";
   const soalPhase = options.phase === "soal" && mode === "latihan";
   const materiAuto = options.autoFlow && mode === "konsep" && !soalPhase;
-  const instructions = soalPhase
-    ? [SOAL_PHASE_INSTRUCTION]
-    : materiAuto
-      ? [KONSEP_AUTO_INSTRUCTION]
-      : MODE_INSTRUCTIONS[mode];
+  // Alur auto di mode selain konsep: tetap pakai instruksi mode, tapi diberi
+  // kemampuan memecah pekerjaan jadi beberapa output lewat @@more supaya tidak
+  // memampatkan cakupan besar ke satu jawaban dangkal.
+  const multipartAuto = Boolean(options.autoFlow) && !soalPhase && !materiAuto;
+  const baseInstructions = materiAuto
+    ? [KONSEP_AUTO_INSTRUCTION]
+    : MODE_INSTRUCTIONS[mode];
+  const instructions = soalPhase ? [SOAL_PHASE_INSTRUCTION] : baseInstructions;
   const tag = soalPhase
     ? " — FASE SOAL (AUTO)"
     : materiAuto
@@ -169,10 +181,11 @@ export function buildModeContext(
     `=== MODE BELAJAR SEKARANG: ${MODE_META[mode].label.toUpperCase()}${tag} ===`,
     `Alasan: ${reason}. ${locked ? "Mode ini dikunci oleh pelajar, jadi PATUHI dan jangan berganti." : "Mode ini dipilih otomatis oleh sistem."}`,
     ...instructions,
+    multipartAuto ? MULTIPART_TAIL : "",
     soalPhase
       ? "Jangan pakai @@more, jangan tulis marker @@mode, dan jangan menjelaskan materi baru di output ini."
       : `Boleh pindah mode kalau alasannya jelas: tulis marker @@mode("konsep"|"latihan"|"proyek"|"uji") di baris PALING AKHIR jawabanmu. Marker itu disembunyikan dari tampilan.`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export function stripModeMarkers(
@@ -188,4 +201,49 @@ export function stripModeMarkers(
       return "";
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Peta output (outline) untuk giliran panjang.
+//
+// Masalah: untuk cakupan besar (mis. "poin 6 sampai akhir"), satu output tidak
+// cukup, dan meminta model mengarang banyak bagian sekaligus membuat ia kehabisan
+// materi lalu mengulang. Solusi: minta PETA (daftar judul bagian) lebih dulu,
+// simpan, lalu isi satu bagian per request. Model hanya "mengisi" slot yang sudah
+// ditentukan → konsisten & tidak berulang.
+// ---------------------------------------------------------------------------
+
+/** Marker peta: baris judul bagian dipisah newline, diapit @@outline(...)...@@end. */
+export const OUTLINE_RE = /@@outline\s*\n([\s\S]*?)\n?@@end/;
+
+/** Instruksi membuat peta: minta daftar judul bagian saja, tanpa isi. */
+export const OUTLINE_INSTRUCTION =
+  "SISTEM (internal, bukan pesan pelajar): permintaan pelajar ini mencakup cakupan BESAR yang tidak cukup dijawab satu kali. JANGAN menjawab materinya sekarang. Tugasmu HANYA menyusun PETA/BLUEPRINT: daftar singkat judul bagian yang akan kamu ajarkan secara berurutan untuk menuntaskan permintaan itu. ATURAN: (1) 3 sampai 8 bagian sesuai kebutuhan nyata — jangan dipaksa banyak, jangan dipaksa sedikit; (2) tiap judul singkat (3-8 kata), spesifik, dan berurutan secara logis dari materi paling awal yang diminta sampai akhir; (3) jangan ada judul yang tumpang tindih/duplikat; (4) jangan sertakan isi materi, penjelasan, atau soal di peta. Keluarkan HANYA dalam format berikut, satu judul per baris, tanpa teks lain di luar blok:\n@@outline\nJudul bagian pertama\nJudul bagian kedua\n@@end";
+
+/** Instruksi mengisi satu bagian dari peta. */
+export function buildPartInstruction(index: number, items: string[]): string {
+  const total = items.length;
+  const current = items[index] ?? "";
+  const list = items.map((t, i) => `${i + 1}. ${t}`).join("\n");
+  return [
+    "SISTEM (internal, bukan pesan pelajar): kamu sedang mengerjakan GILIRAN PANJANG yang sudah direncanakan. PETA bagian yang sudah kamu susun:",
+    list,
+    `Sekarang tulis isi untuk **bagian ke-${index + 1} dari ${total}: "${current}"** — dan HANYA bagian ini.`,
+    "- Ajarkan/tuntaskan bagian ini secara mendalam dan lengkap (apa & kenapa penting, cara kerja langkah demi langkah, analogi bila relevan, contoh konkret yang bisa dijalankan, 1-2 kesalahan umum).",
+    "- JANGAN menulis isi bagian lain, JANGAN mengulang bagian sebelumnya (yang sudah tertulis di atas dianggap sudah dibaca pelajar), JANGAN menyebut nomor bagian lain dalam bentuk isi.",
+    "- Bertitik-tolak dari PETA di atas: bagian ini boleh menyambung dari materi sebelumnya, tapi sisanya diserahkan ke giliran berikutnya.",
+    "- JANGAN menutup dengan soal/latihan/cek pemahaman — soal akan menyusul sebagai output terpisah setelah semua bagian selesai.",
+    "- JANGAN mengirim marker apa pun (tanpa @@more) — sistem yang melanjutkan ke bagian berikutnya.",
+  ].join("\n");
+}
+
+/** Ambil daftar judul dari teks jawaban peta. */
+export function parseOutline(text: string): string[] {
+  const m = text.match(OUTLINE_RE);
+  const block = m ? m[1] : "";
+  return block
+    .split("\n")
+    .map((l) => l.replace(/^\s*[-*•]?\s*\d*[.)]?\s*/, "").trim())
+    .filter((l) => l.length > 0 && l.length <= 80)
+    .slice(0, 8);
 }
