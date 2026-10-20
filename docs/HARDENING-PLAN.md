@@ -2,7 +2,13 @@
 
 > Tujuan: mencegah kelas masalah "output AI kacau / meracuni data" — pesan ganda-ke-tempel, skrip terpotong, history beracun, kirim ganda — serta membangun fondasi kualitas (test, lint, observability) agar proyek tidak lagi bergantung pada keberuntungan ("vibecoding").
 
-Dibuat: 2026-10-09. Status: **Fase 1 inti selesai (report-only) — menunggu review & masa uji.**
+Dibuat: 2026-10-09. Diperbarui: 2026-10-12.
+
+**Status saat ini:**
+- **Fase 1 — SELESAI & TERVERSI.** Guardrail + idempotensi sudah dikerjakan dan di-commit (`048cd9a`, `03aa8fa`, `31f1165`), dengan unit test (`backend/lib/guardrail.test.ts`, `backend/lib/idempotency.test.ts` — 14 test, `npm --prefix backend test`). Guardrail jalan **report-only**: yang aktif baru validasi + perapian ringan (tutup fence, buang marker bocor, nota sistem); **auto-repair retry dua kali belum diaktifkan** — masih sesuai "keluar dari keputusan #2".
+- **Fase 2 & 3 — BELUM dikerjakan** (lock outside `wait_for` pada gateway, `X-Turn-Id`, log file, `/metrics`, test gateway, lint, CI).
+
+Untuk detail apa saja yang benar-benar terpasang vs direncanakan, lihat bagian 4.7 "Catatan implementasi".
 
 ---
 
@@ -92,6 +98,22 @@ Fungsi murni, mudah diuji:
 - *Belum* infra CI — cukup `npm test` lokal di backend.
 
 **Definisi selesai Fase 1:** guardrail + report aktif di produksi; `clientMsgId` aktif; tidak ada lagi pesan ganda/terpotong baru di DB; history tetap bersih saat pengujian dunia nyata 1 minggu.
+
+### 4.7 Catatan implementasi (2026-10-12)
+
+Yang benar-benar terpasang dibanding rencana di atas:
+
+| Rencana | Status |
+|--------|--------|
+| 4.1 `guardrail.ts` (fence, duplikasi, marker leak, `sanitizeText`, `validateOutput`) | ✅ Diimplementasikan persis |
+| 4.2 Wire sebelum persist (`index.ts`) + nota `> ⚠️ ... dirapikan otomatis` | ✅ Aktif (report-only: validasi → sanitasi ringan → nota). `messages.guard_flags` **tidak** dipakai; flag hanya untuk keputusan alur, tidak disimpan. |
+| 4.2 Auto-repair retry saat output korup | ⏸️ Belum — sesuai keputusan #2, retry baru untuk kasus penolakan (refusal), bukan korupsi. |
+| 4.3 `sanitizeStale(messages)` sebelum dikirim ke AI | ✅ Dedup beruntun identik + kecualikan pesan assistant lama `risk: high`, tanpa mengubah DB. |
+| 4.4 Idempotensi `client_msg_id` (kolom + unique index + guard di `addMessage` + `crypto.randomUUID()` di `ChatRoom`) | ✅ Lengkap |
+| 4.5 Hapus dead code `ai_thread`/`parseAiThread` | ⚠️ Parsial — `AiThread` masih dipertukarkan antar-round (dipakai untuk lanjutan dalam satu giliran), tapi tidak lagi disimpan ke DB; kolom `ai_thread` masih ada di skema untuk kompatibilitas. |
+| 4.6 Test Fase 1 (vitest) | ✅ Kerja: 2 file test, 14 assert. |
+
+Di luar rencana, beberapa perbaikan bertetangga ikut dikerjakan dalam Fase 1: **Buatkan Catatan** (`/api/notes/make`), round tambahan "create file" bila model lupa mengeluarkan blok `@@write`, dan round "Ulangi"/regenerate (`/api/chat` + `regenerateMessageId` — jawaban baru mengganti yang lama di tempat, tidak ada pesan ganda). Tombol sambung manual **Lanjutkan** (`/api/chat/continue`) sempat dibuat lalu **dihapus** karena bisa dipakai tanpa batas; jawaban terpotong kini ditangani auto-continue gateway + Ulangi.
 
 ---
 
