@@ -60,9 +60,13 @@ import {
 import { buildPlanContext, stripPlanMarkers } from "../lib/plan";
 import {
   buildModeContext,
+  buildPartInstruction,
   chooseMode,
   isLearnMode,
   normalizeMode,
+  OUTLINE_INSTRUCTION,
+  OUTLINE_RE,
+  parseOutline,
   stripModeMarkers,
   type LearnMode,
   type ModeChoice,
@@ -93,11 +97,12 @@ const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.BACKEND_HOST?.trim() || "127.0.0.1";
 const AI_ERROR_MARKER = "@@ai-error:";
 // Marker "masih ada bagian berikutnya" — mentor menutup pesannya dengan
-// @@more("judul bagian berikutnya"); sistem otomatis melanjutkan giliran
-// tanpa pelajar mengetik apa pun. Semua bagian disimpan sebagai pesan terpisah.
-const MORE_RE = /@@more\(\s*"([^"]*)"\s*\)/;
+// @@more("judul bagian berikutnya") ATAU @@more polos (tanpa argumen); sistem
+// otomatis melanjutkan giliran tanpa pelajar mengetik apa pun. Model web sering
+// lupa mengisi judul, jadi marker tanpa argumen tetap dihormati.
+const MORE_RE = /@@more(?:\(\s*"([^"]*)"\s*\))?/;
 // Batas aman: total bagian auto per giliran (satu /api/chat normal + lanjutan).
-const MAX_PARTS_PER_TURN = 4;
+const MAX_PARTS_PER_TURN = 12;
 const PART_BOUNDARY = "\n@@more\n";
 // Output materi wajib segini panjang sebelum sistem menembak lanjutan soal
 // otomatis — jawaban singkat (sapaan, pertanyaan teknis pendek) tidak memicu.
@@ -105,9 +110,44 @@ const SOAL_MIN_CHARS = 400;
 // Instruksi sintetis untuk lanjutan continuePart: bagian materi berikutnya,
 // atau fase SOAL otomatis yang dipicu sistem setelah blok materi selesai.
 const MATERI_CONT_TAIL =
-  "[LANJUTAN OTOMATIS SISTEM — ini bukan pesan pelajar, jangan ditampilkan, jangan dipanggil pelajar] Lanjutkan ke bagian berikutnya dari materi yang sedang kamu ajarkan, SESUAI URUTAN yang sudah kamu janjikan di pesan terakhirmu. Jangan mengulang materi bagian sebelumnya — yang sudah tertulis di atas dianggap sudah dibaca pelajar. Ajarkan bagian ini dengan lengkap untuk bagian itu (apa & kenapa, cara kerja langkah demi langkah, contoh yang bisa dijalankan, 1 kesalahan umum) lalu berhenti. Jika MASIH ada bagian berikutnya setelah ini (total bagian maksimal 3 per giliran), akhiri jawabanmu dengan baris @@more(\"judul bagian berikutnya\"); jika ini bagian TERAKHIR, jangan tulis @@more.";
+  "[LANJUTAN OTOMATIS SISTEM — ini bukan pesan pelajar, jangan ditampilkan, jangan dipanggil pelajar] Lanjutkan ke bagian berikutnya dari materi yang sedang kamu ajarkan, SESUAI URUTAN yang sudah kamu janjikan di pesan terakhirmu. Jangan mengulang materi bagian sebelumnya — yang sudah tertulis di atas dianggap sudah dibaca pelajar. Ajarkan bagian ini dengan lengkap untuk bagian itu (apa & kenapa, cara kerja langkah demi langkah, contoh yang bisa dijalankan, 1 kesalahan umum) lalu berhenti. Jika MASIH ada bagian berikutnya setelah ini (total bagian maksimal 9 per giliran), akhiri jawabanmu dengan baris @@more(\"judul bagian berikutnya\"); jika ini bagian TERAKHIR, jangan tulis @@more.";
 const SOAL_CONT_TAIL =
   "[LANJUTAN OTOMATIS SISTEM — ini bukan pesan pelajar, jangan ditampilkan, jangan dipanggil pelajar] SEKARANG KAMU DI FASE SOAL: sistem meminta output soal setelah blok materi selesai. Keluarkan SATU output yang berisi HANYA latihan/soal tentang materi yang baru saja kamu ajarkan di giliran ini — tanpa menjelaskan ulang materinya, tanpa materi baru. Kalau di giliran ini TIDAK ada materi baru (mis. kamu hanya menjawab pertanyaan status/meta dari pelajar), jangan mengarang materi: buatlah soal RECALL/penguatan tentang topik yang masih berstatus learning/stuck di progress. Isi 2-4 butir campuran: 1 RECALL singkat tentang materi blok SEBELUMNYA supaya nyambung dan benar-benar diulang, 1-2 butir tentang konsep inti blok ini, dan untuk keterampilan praktis/koding utamakan TUGAS PRAKTIK konkret yang dikerjakan sendiri (buat file, tulis script, jalankan, perbaiki error) — bukan kuis pilihan ganda pendek yang membosankan. JANGAN pernah menguji materi yang belum diajarkan. JANGAN menulis solusi/jawaban. JANGAN pakai @@more. Tunggu pelajar mengerjakan.";
+
+// Pemicu cakupan besar: sinyal di pesan pelajar bahwa materi yang diminta lebih
+// dari sekadar satu bagian (rentang poin, "sampai akhir/selesai", daftar topik).
+// Dipakai untuk memutuskan apakah giliran ini perlu PETA output lebih dulu.
+const BIG_SCOPE_RE =
+  /\b(sampai\s+(akhir|selesai|habis)|dari\s+poin\s+\d+\s+(sampai|hingga|s\/d)|poin\s+\d+\s*(sampai|hingga|s\/d|-)\s*\d+|semua\s+(poin|bagian|materi|bab|topik)|seluruh|sampai\s+poin|hingga\s+poin|dari\s+\d+\s+(sampai|hingga)|keseluruhan)\b/i;
+
+/** State peta output tersimpan di conversations.output_plan (JSON). */
+interface OutputPlan {
+  items: string[];
+  /** Indeks bagian BERIKUTNYA yang harus diisi (0-based). */
+  idx: number;
+  /** 'materi' = masih mengisi bagian; 'soal' = peta materi selesai, lanjut soal. */
+  phase: "materi" | "soal";
+}
+
+function readOutputPlan(conv: { output_plan?: string } | null): OutputPlan | null {
+  const raw = String(conv?.output_plan ?? "").trim();
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw) as Partial<OutputPlan>;
+    if (!Array.isArray(o.items) || o.items.length === 0) return null;
+    return {
+      items: o.items.map((t) => String(t)).slice(0, 12),
+      idx: Number.isSafeInteger(o.idx) ? Number(o.idx) : 0,
+      phase: o.phase === "soal" ? "soal" : "materi",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeOutputPlan(cid: number, plan: OutputPlan | null): void {
+  patchConversation(cid, { output_plan: plan ? JSON.stringify(plan) : "" });
+}
 const DIST_PATH = path.resolve(
   process.env.FRONTEND_DIST ??
     path.join(process.cwd(), "..", "frontend", "dist"),
@@ -356,7 +396,8 @@ function stripMarkers(
     text
       .replace(/@@read\("[^"]*"\)/g, "")
       .replace(/@@mood\("[^"]*"\)/g, "")
-      .replace(/@@more\("[^"]*"\)/g, ""),
+      .replace(/@@more(?:\([^)]*\))?/g, "")
+      .replace(/@@outline\s*\n[\s\S]*?\n?@@end/g, ""),
     modeSink,
   );
   return stripPlanMarkers(base, planSink);
@@ -877,6 +918,35 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       isCont && String(conv?.auto_phase ?? "") === "soal" ? "soal" : "";
     if (autoPhase === "soal") patchConversation(cid, { auto_phase: "" });
     else if (!isCont && conv && conv.auto_phase) patchConversation(cid, { auto_phase: "" });
+
+    // ---------- Peta output (giliran panjang) ----------
+    // Jika ada peta aktif, lanjutan (continuePart) mengisi bagian peta berikutnya,
+    // bukan materi bebas. Giliran normal yang cakupannya besar tapi belum punya
+    // peta akan MEMBUAT peta dulu (fase rencana, outputnya tidak ditampilkan).
+    let outlinePlan = readOutputPlan(conv);
+    const isBigScope =
+      !isCont && !regenTarget && normalizeMode(conv?.mode ?? "") === "auto" &&
+      BIG_SCOPE_RE.test(message);
+    const isPlanning = isBigScope && !outlinePlan;
+    // Lanjutan yang mengisi bagian peta (materi), bukan fase soal.
+    const isPartFill =
+      isCont && autoPhase !== "soal" && Boolean(outlinePlan) &&
+      outlinePlan!.phase === "materi" && outlinePlan!.idx < outlinePlan!.items.length;
+    // Lanjutan terakhir peta: giliran peta soal menyusul saat idx mentok.
+    if (isCont && outlinePlan && outlinePlan.phase === "materi" &&
+        outlinePlan.idx >= outlinePlan.items.length && autoPhase !== "soal") {
+      // Sisa giliran peta materi sudah habis tapi klien masih menembak lanjutan:
+      // picu fase soal sekali, lalu bersihkan peta.
+      patchConversation(cid, { auto_phase: "soal" });
+      writeOutputPlan(cid, null);
+      outlinePlan = null;
+    }
+    if (!isCont && outlinePlan && !isPartFill) {
+      // Peta basi dari giliran lama: giliran baru tanpa lanjutan → buang.
+      writeOutputPlan(cid, null);
+      outlinePlan = null;
+    }
+
     // continuePart: lanjutkan bagian berikutnya tanpa pesan user baru. Instruksi
     // sintetis dikirim sebagai pesan user terakhir (tidak disimpan ke DB) agar
     // model meneruskan urutan materi yang sudah dijanjikannya.
@@ -884,7 +954,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       ? [
           {
             role: "user",
-            content: autoPhase === "soal" ? SOAL_CONT_TAIL : MATERI_CONT_TAIL,
+            content: autoPhase === "soal"
+              ? SOAL_CONT_TAIL
+              : isPartFill
+                ? buildPartInstruction(outlinePlan!.idx, outlinePlan!.items)
+                : MATERI_CONT_TAIL,
           },
         ]
       : [];
@@ -899,7 +973,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       : null;
     const ctx = await buildChatContext(cid, profile, conv!, message, { forceMode, autoPhase });
     folder = ctx.folder;
-    const { modeChoice, turnMode, system, planIds, allowWrite } = ctx;
+    const { modeChoice, turnMode, planIds, allowWrite } = ctx;
+    // Fase rencana: system diarahkan untuk membuat PETA saja (tanpa materi).
+    const system = isPlanning ? `${ctx.system}\n\n${OUTLINE_INSTRUCTION}` : ctx.system;
 
     const planSink = new Map<number, PlanStatus>();
     const modeSink = new Map<LearnMode, LearnMode>();
@@ -968,6 +1044,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     res.writeHead(200, headers);
+
+    // Fase rencana: beri tahu klien agar menampilkan status, bukan bubble kosong.
+    if (isPlanning) res.write("@@planning\n");
 
     // Round 1 — buffer awal untuk deteksi marker @@read, lalu stream bila aman
     const parseRound1 = (
@@ -1363,8 +1442,42 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     // Mode jawaban mentor SEBELUM giliran ini (sebelum disimpan) — dipakai
     // meredam trigger soal tepat setelah output soal.
-    const prevAssistantMode =
+        const prevAssistantMode =
       [...listMessages(cid)].reverse().find((m) => m.role === "assistant")?.mode ?? "";
+
+    // ---------- Fase RENCANA: simpan peta, jangan tampilkan sebagai pesan ----------
+    if (isPlanning && !clientAbort.signal.aborted && !providerError) {
+      const items = parseOutline(finalRaw);
+      if (items.length >= 2) {
+        writeOutputPlan(cid, { items, idx: 0, phase: "materi" });
+        // Sinyal ke klien: mode rencana selesai, lanjutkan ke bagian pertama.
+        res.write(`\n@@mood:tenang\n`);
+        res.write(`@@mode:${effectiveMode}\n`);
+        res.write(`@@planned:${items.length}\n`);
+        if (!res.writableEnded) res.write(PART_BOUNDARY);
+        if (!res.writableEnded) res.end();
+        return;
+      }
+      // Peta gagal dibentuk: jangan buntu — lanjut seperti giliran biasa.
+      // (Biarkan jatuh ke penyimpanan normal di bawah; finalText = materi.)
+    }
+
+    // Lanjutan mengisi satu bagian peta: naikkan indeks bagian setelah sukses.
+    if (isPartFill && !clientAbort.signal.aborted && Boolean(finalText)) {
+      const plan = readOutputPlan(getConversation(cid));
+      if (plan) {
+        const nextIdx = plan.idx + 1;
+        // Kalau masih ada bagian → simpan idx baru. Kalau sudah habis, tandai
+        // giliran peta selesai; fase soal akan dipicu di blok sinyal di bawah.
+        writeOutputPlan(cid, {
+          ...plan,
+          idx: nextIdx,
+          phase: nextIdx >= plan.items.length ? "soal" : "materi",
+        });
+      }
+    }
+
+
     if (finalText && !res.writableEnded) {
       const { mood, clean: moodClean } = finalMood(finalText);
       finalText = moodClean.trim();
@@ -1418,12 +1531,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
     // Sinyal @@more: mentor masih punya bagian berikutnya → klien otomatis
     // menembak /api/chat (continuePart) TANPA pelajar mengetik apa pun.
-    const hasMore = MORE_RE.test(finalRaw) && !clientAbort.signal.aborted && Boolean(finalText);
+    let hasMore = MORE_RE.test(finalRaw) && !clientAbort.signal.aborted && Boolean(finalText);
+    // Giliran peta: lanjutkan selama bagian peta belum habis.
+    if (isPartFill && !clientAbort.signal.aborted && Boolean(finalText)) {
+      const plan = readOutputPlan(getConversation(cid));
+      hasMore = Boolean(plan && plan.phase === "materi" && plan.idx < plan.items.length);
+    }
     // Alur auto: blok materi selesai (tanpa @@more, output substantial) →
     // tembak lanjutan SOAL otomatis. Diredam tepat setelah output soal
     // (prevMode 'latihan') supaya giliran penilaian tidak langsung menagih
     // soal lagi, dan setelah regen/beralih mode.
     let fireSoal = false;
+    // Giliran peta materi yang baru saja tuntas → picu fase soal.
+    const planDoneToSoal =
+      isPartFill && !clientAbort.signal.aborted &&
+      readOutputPlan(getConversation(cid))?.phase === "soal";
     if (
       !hasMore &&
       !regenTarget &&
@@ -1431,14 +1553,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       !clientAbort.signal.aborted &&
       Boolean(finalText) &&
       autoPhase !== "soal" &&
-      effectiveMode === "konsep" &&
       normalizeMode(String(conv?.mode ?? "")) === "auto" &&
-      finalText.length >= SOAL_MIN_CHARS
+      finalText.length >= SOAL_MIN_CHARS &&
+      (planDoneToSoal || effectiveMode === "konsep")
     ) {
-      fireSoal = prevAssistantMode !== "latihan";
+      fireSoal = prevAssistantMode !== "latihan" || planDoneToSoal;
     }
     if ((hasMore || fireSoal) && !res.writableEnded) {
-      if (fireSoal) patchConversation(cid, { auto_phase: "soal" });
+      if (fireSoal) {
+        patchConversation(cid, { auto_phase: "soal" });
+        if (planDoneToSoal) writeOutputPlan(cid, null);
+      }
       res.write(PART_BOUNDARY);
     }
 
