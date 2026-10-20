@@ -39,6 +39,8 @@ export interface Conversation {
   mode: string;
   ai_mode: string;
   ai_session: string;
+  /** Fase alur auto: '' = materi, 'soal' = output soal sudah diminta (menunggu lanjutan). */
+  auto_phase: string;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -65,6 +67,8 @@ export interface Topic {
   evidence: string;
   strong_evidence: number;
   last_reviewed_at: string;
+  /** Relatif path berkas catatan/LKS milik topik ini (untuk auto-update). */
+  note_rel: string;
   conversation_id: number;
   updated_at: string;
 }
@@ -289,6 +293,8 @@ ensureColumn("topics", "confidence", "confidence INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "evidence", "evidence TEXT NOT NULL DEFAULT ''");
 ensureColumn("topics", "strong_evidence", "strong_evidence INTEGER NOT NULL DEFAULT 0");
 ensureColumn("topics", "last_reviewed_at", "last_reviewed_at TEXT NOT NULL DEFAULT ''");
+ensureColumn("topics", "note_rel", "note_rel TEXT NOT NULL DEFAULT ''");
+ensureColumn("conversations", "auto_phase", "auto_phase TEXT NOT NULL DEFAULT ''");
 
 // Penguatan: topik lama yang sudah mastered dianggap sudah punya bukti kuat penuh,
 // supaya aturan keras penguatan tidak menurunkan progres yang sudah ada.
@@ -429,9 +435,10 @@ export function patchConversation(
     mode?: string;
     ai_mode?: string;
     ai_session?: string;
+    auto_phase?: string;
   },
 ): void {
-  const keys = ["title", "folder", "mode", "ai_mode", "ai_session"].filter(
+  const keys = ["title", "folder", "mode", "ai_mode", "ai_session", "auto_phase"].filter(
     (k) => patch[k as keyof typeof patch] !== undefined,
   );
   if (keys.length === 0) return;
@@ -569,39 +576,29 @@ export function countMessages(conversationId: number): number {
   return row?.c ?? 0;
 }
 
-/** Gabungkan teks lanjutan ke pesan assistant yang sudah ada (tanpa pesan baru). */
-export function appendMessageContent(messageId: number, extra: string): void {
-  const add = (extra ?? "").replace(/\r\n/g, "\n").trim();
-  if (!add) return;
-  const row = db
-    .prepare("SELECT * FROM messages WHERE id = ?")
-    .get(messageId) as Message | undefined;
-  if (!row || row.role !== "assistant") return;
-  // Rapikan sambungan: kalau jawaban lanjutan mengulang ekor yang sudah ada
-  // (model kadang mengulang beberapa kata terakhir), buang bagian yang tumpang
-  // tindih supaya tidak jadi teks ganda.
-  const base = (row.content ?? "").replace(/\r\n/g, "\n");
-  const merged = mergeContinuation(base, add);
-  db.prepare("UPDATE messages SET content = ? WHERE id = ?").run(merged, messageId);
-  touchConversation(row.conversation_id);
-}
-
 /**
- * Gabungkan `extra` ke `base`, membuang tumpang tindih ekor/awal yang identik.
- * Sambungan teks sering mulai dengan kalimat terakhir milik jawaban lama —
- * kalau ditempel mentah, isi jadi terulang.
+ * Ganti isi pesan assistant yang sudah ada (tombol "Ulangi"): jawaban baru
+ * menimpa yang lama di tempat — ID & posisi pesan tetap, tidak ada baris baru,
+ * jadi histori/memori tidak menumpuk dua jawaban untuk satu pertanyaan.
  */
-export function mergeContinuation(base: string, extra: string): string {
-  const b = base.replace(/\r\n/g, "\n");
-  const e = (extra ?? "").replace(/\r\n/g, "\n").trim();
-  if (!e) return b.trimEnd();
-  if (!b) return e;
-  // Cari potongan terpanjang di awal `extra` yang sama dengan ekor `base`.
-  const max = Math.min(e.length, b.length, 400);
-  for (let k = max; k > 8; k -= 1) {
-    if (b.endsWith(e.slice(0, k))) return `${b}${e.slice(k)}`;
-  }
-  return `${b}${e}`;
+export function replaceMessage(
+  conversationId: number,
+  messageId: number,
+  content: string,
+  mood = "",
+  mode = "",
+): boolean {
+  const row = db
+    .prepare(
+      "SELECT 1 FROM messages WHERE id = ? AND conversation_id = ? AND role = 'assistant'",
+    )
+    .get(messageId, conversationId);
+  if (!row) return false;
+  db.prepare(
+    "UPDATE messages SET content = ?, mood = ?, mode = ? WHERE id = ? AND conversation_id = ?",
+  ).run(content, mood, mode, messageId, conversationId);
+  touchConversation(conversationId);
+  return true;
 }
 
 export function getMessage(messageId: number): Message | null {
@@ -1195,6 +1192,11 @@ export function getFileRevision(id: number): FileRevision | undefined {
 
 export function getTopic(id: number): Topic | undefined {
   return db.prepare("SELECT * FROM topics WHERE id = ?").get(id) as Topic | undefined;
+}
+
+/** Simpan path berkas catatan topik (auto-note) tanpa mengubah status/mastery. */
+export function setTopicNoteRel(id: number, rel: string): void {
+  db.prepare("UPDATE topics SET note_rel = ? WHERE id = ?").run(rel.slice(0, 300), String(id));
 }
 
 function clampPercent(value: number | undefined, fallback = 0): number {

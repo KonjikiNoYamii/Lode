@@ -46,6 +46,12 @@ describe("validateOutput", () => {
     expect(r.flags).toContain("marker_leak");
   });
 
+  it("mendeteksi marker @@more yang bocor ke teks pesan", () => {
+    const r = validateOutput('Materi selesai. @@more("bagian berikutnya")');
+    expect(r.ok).toBe(false);
+    expect(r.flags).toContain("marker_leak");
+  });
+
   it("teks kosong dianggap aman", () => {
     expect(validateOutput("   ").ok).toBe(true);
   });
@@ -86,13 +92,24 @@ describe("sanitizeStale", () => {
     expect(out.map((m) => m.id)).toEqual([2, 3, 4]);
   });
 
-  it("mengeluarkan pesan assistant korup berat dari history", () => {
+  it("merapikan pesan assistant rusak (bukan membuang) agar history tidak bolong", () => {
     const out = sanitizeStale([
       mk(1, "user", "soal?"),
       mk(2, "assistant", "```bash\necho potong"),
       mk(3, "user", "bisa ulang?"),
     ]);
-    expect(out.map((m) => m.id)).toEqual([1, 3]);
+    // Semua pesan dipertahankan; yang rusak hanya dirapikan.
+    expect(out.map((m) => m.id)).toEqual([1, 2, 3]);
+    const fixed = out.find((m) => m.id === 2)!;
+    expect((fixed.content.match(/```/g) ?? []).length).toBe(2);
+  });
+
+  it("pesan assistant sehat tidak diubah", () => {
+    const out = sanitizeStale([
+      mk(1, "assistant", "Jawaban **tepat**."),
+      mk(2, "user", "lanjut"),
+    ]);
+    expect(out.map((m) => m.content)).toEqual(["Jawaban **tepat**.", "lanjut"]);
   });
 
   it("tidak pernah mengembalikan history kosong", () => {

@@ -34,7 +34,7 @@ const SKIP_HEAVY_ABOVE = 200_000;
 // Marker perintah yang diproduksi model (Family A). Kalau masih ada di teks
 // setelah `stripMarkers`, berarti malformed/bocor.
 const MARKER_LEAK_RE =
-  /@@\s*(?:write|mkdir|read|plan|mode|mood)\s*(?:\([^)]*\))?/gi;
+  /@@\s*(?:write|mkdir|read|plan|mode|mood|more)\s*(?:\([^)]*\))?/gi;
 
 function countFences(text: string): number {
   return (text.match(FENCE_RE) ?? []).length;
@@ -122,7 +122,12 @@ export function formatNotice(flags: GuardFlag[]): string {
 /**
  * Pembersihan history sebelum dikirim ke AI:
  * 1. dedup pesan beruntun identik (tanda kirim ganda),
- * 2. kecualikan pesan assistant lama yang korup berat (bukan mengubah DB).
+ * 2. RAPIKAN (bukan buang) pesan assistant yang formatnya rusak — tutup blok
+ *    kode menggantung, buang marker bocor — supaya history tidak pernah bolong.
+ *
+ * Tidak mengubah DB: hanya bentuk yang dikirim ke model. Pesan yang sama
+ * sekali rusak tidak lagi menghilang dari konteks, jadi model tidak kehilangan
+ * jejak jawaban sebelumnya (dulu itu memicu balasan "sebagai AI…").
  */
 export function sanitizeStale(
   messages: Pick<Message, "id" | "role" | "content">[],
@@ -138,8 +143,10 @@ export function sanitizeStale(
     }
     deduped.push(m);
   }
-  const kept = deduped.filter(
-    (m) => m.role !== "assistant" || validateOutput(m.content ?? "").risk !== "high",
-  );
-  return kept.length > 0 ? kept : deduped.slice(-1);
+  const repaired = deduped.map((m) => {
+    if (m.role !== "assistant") return m;
+    if (validateOutput(m.content ?? "").risk !== "high") return m;
+    return { ...m, content: sanitizeText(m.content ?? "") };
+  });
+  return repaired.length > 0 ? repaired : deduped.slice(-1);
 }

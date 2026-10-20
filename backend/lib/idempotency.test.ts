@@ -11,6 +11,7 @@ const {
   addMessage,
   createConversation,
   listMessages,
+  replaceMessage,
 } = await import("./db");
 
 let cid = 0;
@@ -38,5 +39,31 @@ describe("addMessage dengan clientMsgId", () => {
       (m.client_msg_id ?? "").startsWith("a-"),
     );
     expect(rows.length).toBe(2);
+  });
+});
+
+describe("replaceMessage (Ulangi)", () => {
+  it("mengganti isi jawaban assistant di tempat tanpa menambah baris", () => {
+    addMessage(cid, "user", "pertanyaan ulangi");
+    addMessage(cid, "assistant", "jawaban lama (terpotong)");
+    const before = listMessages(cid);
+    const target = before.find((m) => m.role === "assistant");
+
+    const ok = target ? replaceMessage(cid, target.id, "jawaban baru", "senang", "latihan") : false;
+    expect(ok).toBe(true);
+
+    const after = listMessages(cid);
+    expect(after.length).toBe(before.length); // tidak ada pesan baru
+    const replaced = after.find((m) => m.role === "assistant");
+    expect(replaced?.content).toBe("jawaban baru");
+    expect(replaced?.mood).toBe("senang");
+    expect(replaced?.mode).toBe("latihan");
+  });
+
+  it("tidak bisa mengganti pesan user", () => {
+    addMessage(cid, "user", "pertanyaan user");
+    const userMsg = listMessages(cid).filter((m) => m.role === "user").pop();
+    const ok = userMsg ? replaceMessage(cid, userMsg.id, "abc") : true;
+    expect(ok).toBe(false);
   });
 });

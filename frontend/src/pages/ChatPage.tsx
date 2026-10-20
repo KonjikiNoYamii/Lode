@@ -90,7 +90,15 @@ export default function ChatPage() {
   const [totalMessages, setTotalMessages] = useState(0);
 
   const addMessages = useCallback((msgs: Message[]) => {
-    setMessages((prev) => [...prev, ...msgs]);
+    setMessages((prev) => {
+      // Buang bubble optimistis (id < 0) untuk pesan yang barusan dicatat
+      // server: pesan asli sudah tersimpan, jadi varian lokal tidak boleh
+      // tertinggal — kalau tertinggal, tombol "Ulangi" mengirim id negatif
+      // (server menolak: regenerateMessageId tidak valid).
+      const isAssistant = msgs.length > 0 && msgs.every((m) => m.role === "assistant");
+      const base = isAssistant ? prev.filter((m) => m.id > 0 || m.role !== "user") : prev;
+      return [...base, ...msgs];
+    });
     setTotalMessages((prev) => prev + msgs.length);
   }, []);
 

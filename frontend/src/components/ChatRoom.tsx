@@ -8,8 +8,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { send as apiSend } from "@/api";
-import { makeNote, continueMessage } from "@/api";
+import { autoNote, makeNote } from "@/api";
 import type {
   LearnMode,
   Memory,
@@ -75,10 +74,16 @@ function stripStreamMood(s: string): string {
     .replace(/\n?@@mood:[a-z]+\s*/g, "")
     .replace(/\n?@@plan:\d+:[a-z]+\s*/g, "")
     .replace(/\n?@@files:\d+\s*/g, "")
-    .replace(/\n?@@mode:[a-z]+\s*/g, "");
+    .replace(/\n?@@mode:[a-z]+\s*/g, "")
+    .replace(/\n?@@more\s*/g, "");
 }
 
 const RESET_MARKER = "\n@@reset\n";
+// Sinyal dari backend: mentor masih punya bagian berikutnya → klien otomatis
+// menembak /api/chat (continuePart) tanpa pelajar mengetik apa pun.
+const PART_BOUNDARY = "\n@@more\n";
+// Batas total bagian otomatis per giliran (sejalan dengan prompt mentor).
+const MAX_AUTO_PARTS = 4;
 
 /**
  * Buang semua teks sebelum marker reset terakhir — backend mengirimnya ketika
@@ -135,23 +140,6 @@ function lastMood(messages: Message[]): Mood | undefined {
     }
   }
   return undefined;
-}
-
-/**
- * Gabungkan sambungan ke jawaban lama. Kalau jawaban lanjutan mengulang ekor
- * yang sudah ada (model kadang mengulang beberapa kata terakhir), bagian yang
- * tumpang tindih dibuang supaya tidak jadi teks ganda.
- */
-function mergeOverlap(base: string, extra: string): string {
-  const b = (base ?? "").replace(/\r\n/g, "\n");
-  const e = (extra ?? "").replace(/\r\n/g, "\n").trim();
-  if (!e) return b;
-  if (!b) return e;
-  const max = Math.min(e.length, b.length, 400);
-  for (let k = max; k > 8; k -= 1) {
-    if (b.endsWith(e.slice(0, k))) return b + e.slice(k);
-  }
-  return b + e;
 }
 
 interface Props {
@@ -333,8 +321,8 @@ export default function ChatRoom({
   const [noteResult, setNoteResult] = useState<
     Record<number, { files: string[]; error?: string }>
   >({});
-  const [continuingId, setContinuingId] = useState<number | null>(null);
-  const [continueLive, setContinueLive] = useState("");
+  const [regeneratingId, setRegeneratingId] = useState<number | null>(null);
+  const [regenLive, setRegenLive] = useState("");
   const [filter, setFilter] = useState<"all" | TopicStatus>("all");
   const [showAllTopics, setShowAllTopics] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -424,6 +412,8 @@ export default function ChatRoom({
     setError(preservedErrorRef.current);
     preservedErrorRef.current = "";
     setSending(false);
+    setRegeneratingId(null);
+    setRegenLive("");
   }, [currentId]);
 
   useEffect(() => {
@@ -455,37 +445,129 @@ export default function ChatRoom({
     }
   }
 
-  /** Sambung jawaban AI yang terpotong; hasilnya digabungkan ke pesan itu juga. */
-  async function handleContinue(message: Message) {
-    if (!currentId || continuingId !== null || sendingStateRef.current) return;
+  /**
+   * "Ulangi" — minta Lode menjawab ulang pertanyaan terakhir dari context yang
+   * sama (topik/memori/plan/workspace tetap). Jawaban baru MENGGANTI jawaban
+   * lama di tempat (ID pesan tetap); tidak ada pesan user/assistant baru, jadi
+   * histori dan memori tidak menumpuk.
+   */
+  async function handleRegenerate(message: Message) {
+    if (!currentId || regenLive.trim() || regeneratingId !== null || sendingStateRef.current) return;
     const controller = new AbortController();
     activeRequestRef.current?.abort();
     activeRequestRef.current = controller;
-    setContinuingId(message.id);
-    setContinueLive("");
     setError("");
+    setRegeneratingId(message.id);
+    setRegenLive("");
     try {
-      const result = await continueMessage(
-        currentId,
-        message.id,
-        controller.signal,
-        (partial) => setContinueLive(partial),
-        () => setContinueLive(""),
-      );
-      if (controller.signal.aborted) return;
-      if (result.error) setError(result.error);
-      if (result.text) {
-        updateMessage(message.id, mergeOverlap(message.content, result.text));
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: currentId,
+          regenerateMessageId: message.id,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+          detail?: string;
+        } | null;
+        if (controller.signal.aborted) return;
+        setError(`${j?.error ?? "Terjadi kesalahan"}${j?.detail ? ` — ${j.detail}` : ""}`);
+        return;
       }
+      if (!res.body) {
+        setError("Tidak ada respons dari server.");
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        if (controller.signal.aborted) return;
+        if (acc.includes(RESET_MARKER)) {
+          acc = applyStreamReset(acc);
+          setRegenLive("");
+        }
+        setRegenLive(stripStreamMood(acc).replace(/\n?@@ai-error:[^\n]*/g, ""));
+
+        const streamMarker = acc.match(/@@mood:([a-z]+)/);
+        if (streamMarker && isMood(streamMarker[1])) {
+          setMood(streamMarker[1]);
+        } else {
+          const liveDetected = detectLiveMood(acc);
+          if (liveDetected) setMood(liveDetected);
+        }
+      }
+      acc += decoder.decode();
+      if (controller.signal.aborted) return;
+      if (acc.includes(RESET_MARKER)) acc = applyStreamReset(acc);
+
+      const result = extractStreamResult(acc);
+      const moodMatch = acc.match(/@@mood:([a-z]+)/);
+      const streamMood = moodMatch?.[1];
+      const nextMood: Mood = isMood(streamMood)
+        ? streamMood
+        : isMood(mood)
+          ? mood
+          : isMood(lastMood(messages))
+            ? (lastMood(messages) as Mood)
+            : "netral";
+      setMood(nextMood);
+
+      for (const marker of acc.matchAll(/@@plan:(\d+):([a-z]+)/g)) {
+        const pid = Number(marker[1]);
+        const status = marker[2] as PlanStatus;
+        if (!Number.isSafeInteger(pid) || !PLAN_STATUSES.includes(status)) continue;
+        onPlanUpdated(
+          plan.map((item) => (item.id === pid ? { ...item, status } : item)),
+        );
+      }
+
+      const modeMatch = acc.match(/@@mode:([a-z]+)/);
+      if (modeMatch && MODES.includes(modeMatch[1] as LearnMode)) {
+        onEffectiveMode(modeMatch[1] as LearnMode);
+      }
+
+      if (acc.match(/@@files:\d+/)) onRevisionsUpdated();
+
+      if (result.error) {
+        setError(result.error);
+        return; // jawaban lama tetap utuh di DB & tampilan
+      }
+      if (!result.text) {
+        setError("Lode tidak menghasilkan jawaban baru. Jawaban lama tetap utuh.");
+        return;
+      }
+      updateMessage(message.id, result.text);
+
+      // Rekomputasi topik/memori dari jawaban baru (isinya sudah menggantikan
+      // yang lama, jadi hasilnya konsisten — bukan akumulasi dobel).
+      void fetch("/api/memory/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: currentId }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then(() => {
+          if (currentIdRef.current === currentId) onMemoryUpdated(currentId);
+        })
+        .catch(() => undefined);
     } catch (err) {
       if (!controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : "Gagal menyambung jawaban");
+        setError(err instanceof Error ? err.message : "Koneksi bermasalah");
       }
     } finally {
       if (activeRequestRef.current === controller) {
         activeRequestRef.current = null;
-        setContinuingId(null);
-        setContinueLive("");
+        setRegeneratingId(null);
+        setRegenLive("");
       }
     }
   }
@@ -588,54 +670,26 @@ export default function ChatRoom({
       onNewConversation(id, title);
     };
 
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, conversationId: cidBefore, clientMsgId }),
-        signal: controller.signal,
-      });
-      const cid = Number(res.headers.get("x-conversation-id")) || cidBefore || 0;
-      const titleRaw = res.headers.get("x-conversation-title");
-      const convTitle = titleRaw
-        ? decodeURIComponent(titleRaw)
-        : msg.length > 30
-          ? `${msg.slice(0, 30)}…`
-          : msg;
+    let cid = cidBefore || 0;
+    let lastMode: LearnMode = effectiveMode;
+    let runError = "";
+    // true kalau rangkaian giliran ini diakhiri output FASE SOAL otomatis
+    // (continuePart ber-marker latihan) → memicu auto-note setelah progress tercatat.
+    let sawSoalPart = false;
+    // Adoption percakapan baru ditunda sampai SELURUH rangkaian bagian selesai:
+    // pindah currentId di tengah akan membatalkan part berikutnya via useEffect.
+    const adoptionBox = { current: null as { id: number; title: string } | null };
 
-      if (!res.ok) {
-        const j = (await res.json().catch(() => null)) as {
-          error?: string;
-          detail?: string;
-        } | null;
-        if (controller.signal.aborted) return;
-        const message = `${j?.error ?? "Terjadi kesalahan"}${j?.detail ? ` — ${j.detail}` : ""}`;
-        if (cid && !cidBefore) {
-          adoptConversation(cid, convTitle, message);
-        } else {
-          setError(message);
-        }
-        return;
-      }
-
-      if (!res.body) {
-        const message = "Tidak ada respons dari server.";
-        if (cid && !cidBefore) {
-          adoptConversation(cid, convTitle, message);
-        } else {
-          setError(message);
-        }
-        return;
-      }
-
-      const reader = res.body.getReader();
+    // Terima satu bagian (streaming), update bubble live & mood.
+    const ingest = async (res: Response): Promise<string> => {
+      const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let acc = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) return acc;
         if (acc.includes(RESET_MARKER)) acc = applyStreamReset(acc);
         setLive(stripStreamMood(acc).replace(/\n?@@ai-error:[^\n]*/g, ""));
 
@@ -650,39 +704,114 @@ export default function ChatRoom({
         }
       }
       acc += decoder.decode();
-      if (controller.signal.aborted) return;
-      if (acc.includes(RESET_MARKER)) acc = applyStreamReset(acc);
+      if (controller.signal.aborted) return acc;
+      return acc.includes(RESET_MARKER) ? applyStreamReset(acc) : acc;
+    };
 
-      const result = extractStreamResult(acc);
-      const moodMatch = acc.match(/@@mood:([a-z]+)/);
-      const streamMood = moodMatch?.[1];
-      const nextMood: Mood = isMood(streamMood)
-        ? streamMood
-        : isMood(mood)
-        ? mood
-        : isMood(lastMood(messages))
-        ? (lastMood(messages) as Mood)
-        : "netral";
-      setMood(nextMood);
-
-      for (const marker of acc.matchAll(/@@plan:(\d+):([a-z]+)/g)) {
-        const pid = Number(marker[1]);
-        const status = marker[2] as PlanStatus;
-        if (!Number.isSafeInteger(pid) || !PLAN_STATUSES.includes(status)) continue;
-        onPlanUpdated(
-          plan.map((item) => (item.id === pid ? { ...item, status } : item)),
-        );
+    // Jalankan satu `/api/chat` (bagian ke-1 normal, bagian berikutnya
+    // continuePart) dan kembalikan stream mentah hasilnya.
+    const runPart = async (body: object): Promise<string> => {
+      let res: Response;
+      try {
+        res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (controller.signal.aborted) return "";
+        const message = err instanceof Error ? err.message : "Koneksi bermasalah";
+        setError(message);
+        runError = message;
+        return "";
       }
-
-      const modeMatch = acc.match(/@@mode:([a-z]+)/);
-      if (modeMatch && MODES.includes(modeMatch[1] as LearnMode)) {
-        onEffectiveMode(modeMatch[1] as LearnMode);
+      const resCid = Number(res.headers.get("x-conversation-id")) || cid || cidBefore || 0;
+      const titleRaw = res.headers.get("x-conversation-title");
+      const convTitle = titleRaw
+        ? decodeURIComponent(titleRaw)
+        : msg.length > 30
+          ? `${msg.slice(0, 30)}…`
+          : msg;
+      cid = resCid;
+      if (!cidBefore && !adoptedConversation) {
+        adoptionBox.current = { id: cid, title: convTitle };
       }
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+          detail?: string;
+        } | null;
+        if (controller.signal.aborted) return "";
+        const message = `${j?.error ?? "Terjadi kesalahan"}${j?.detail ? ` — ${j.detail}` : ""}`;
+        setError(message);
+        runError = message;
+        return "";
+      }
+      if (!res.body) {
+        const message = "Tidak ada respons dari server.";
+        setError(message);
+        runError = message;
+        return "";
+      }
+      return ingest(res);
+    };
 
-      if (acc.match(/@@files:\d+/)) onRevisionsUpdated();
+    try {
+      // Loop bagian: mentor boleh melanjutkan materi otomatis (sinyal @@more)
+      // sampai maksimal MAX_AUTO_PARTS bagian per giliran, tanpa pelajar mengetik.
+      let hasMore = true;
+      for (let partIdx = 0; partIdx < MAX_AUTO_PARTS && hasMore; partIdx++) {
+        hasMore = false;
+        if (controller.signal.aborted) break;
+        const isCont = partIdx > 0;
+        const body = isCont
+          ? { conversationId: cid, continuePart: true, mode: lastMode }
+          : { message: msg, conversationId: cidBefore, clientMsgId };
+        const acc = await runPart(body);
+        if (!acc || controller.signal.aborted || runError) break;
 
-      if (result.error) setError(result.error);
-      if (result.text && !result.error) {
+        const result = extractStreamResult(acc);
+        const moodMatch = acc.match(/@@mood:([a-z]+)/);
+        const streamMood = moodMatch?.[1];
+        const nextMood: Mood = isMood(streamMood)
+          ? streamMood
+          : isMood(mood)
+            ? mood
+            : isMood(lastMood(messages))
+              ? (lastMood(messages) as Mood)
+              : "netral";
+        setMood(nextMood);
+
+        for (const marker of acc.matchAll(/@@plan:(\d+):([a-z]+)/g)) {
+          const pid = Number(marker[1]);
+          const status = marker[2] as PlanStatus;
+          if (!Number.isSafeInteger(pid) || !PLAN_STATUSES.includes(status)) continue;
+          onPlanUpdated(
+            plan.map((item) => (item.id === pid ? { ...item, status } : item)),
+          );
+        }
+
+        const modeMatch = acc.match(/@@mode:([a-z]+)/);
+        if (modeMatch && MODES.includes(modeMatch[1] as LearnMode)) {
+          lastMode = modeMatch[1] as LearnMode;
+          onEffectiveMode(lastMode);
+        }
+        if (isCont && modeMatch && modeMatch[1] === "latihan") sawSoalPart = true;
+
+        if (acc.match(/@@files:\d+/)) onRevisionsUpdated();
+
+        if (result.error) {
+          setError(result.error);
+          runError = result.error;
+          break;
+        }
+        if (!result.text) {
+          const message = "Lode tidak menghasilkan jawaban.";
+          setError(message);
+          runError = message;
+          break;
+        }
         addMessages([
           {
             id: -Date.now() + 1,
@@ -693,24 +822,41 @@ export default function ChatRoom({
             mood: nextMood,
           },
         ]);
+        // Beres satu bagian → bersihkan bubble live agar tidak dobel dengan
+        // pesan yang baru dikomit (part berikutnya akan menge-stream-nya lagi).
+        setLive("");
+
+        hasMore = acc.includes(PART_BOUNDARY);
       }
 
-      adoptConversation(cid, convTitle, result.error);
-      if (result.error || !result.text) return;
-
-      void fetch("/api/memory/update", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: cid }),
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .then(() => {
-          if (currentIdRef.current === cid) onMemoryUpdated(cid);
+      // Adopsi percakapan baru setelah seluruh rangkaian selesai.
+      const adopt = adoptionBox.current;
+      if (adopt) adoptConversation(adopt.id, adopt.title, runError);
+      if (!runError && cid) {
+        void fetch("/api/memory/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversationId: cid }),
         })
-        .catch(() => undefined);
+          .then((r) => (r.ok ? r.json() : null))
+          .then((upd) => {
+            if (currentIdRef.current === cid) onMemoryUpdated(cid);
+            if (!upd || !sawSoalPart || controller.signal.aborted) return;
+            // Blok belajar (materi + soal) selesai & progress tercatat →
+            // merge catatan/LKS topik di latar belakang.
+            return autoNote(cid)
+              .then((r) => {
+                if (r.files && r.files.length > 0) onRevisionsUpdated();
+              })
+              .catch(() => undefined);
+          })
+          .catch(() => undefined);
+      }
     } catch (err) {
       if (!controller.signal.aborted) {
-        setError(err instanceof Error ? err.message : "Koneksi bermasalah");
+        const message = err instanceof Error ? err.message : "Koneksi bermasalah";
+        setError(message);
+        runError = message;
       }
     } finally {
       if (activeRequestRef.current === controller) {
@@ -944,21 +1090,23 @@ export default function ChatRoom({
                 <div key={m.id} className="flex items-start gap-2.5">
                   <MiniAvatar mood={isMood(m.mood) ? m.mood : "netral"} />
                   <div className={`min-w-0 max-w-[85%] flex-1 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3 sm:max-w-[80%] msg-anim${lastId === m.id ? " msg-stagger" : ""}`}>
-                    <Markdown>{continuingId === m.id ? mergeOverlap(m.content, continueLive) : m.content}</Markdown>
-                    {continuingId === m.id && (
+                    <Markdown>{regeneratingId === m.id ? regenLive || m.content : m.content}</Markdown>
+                    {regeneratingId === m.id && (
                       <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-sakura align-middle" />
                     )}
                     {!live && !sending && (
                       <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-white/5 pt-2.5">
-                        <button
-                          onClick={() => handleContinue(m)}
-                          disabled={continuingId !== null || Boolean(noteBusy[m.id])}
-                          title="Sambung jawaban yang terpotong tanpa mengetik ulang pertanyaan"
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-akari/25 bg-akari/5 px-2.5 py-1 text-[11px] font-bold text-akari transition enabled:hover:bg-akari/15 enabled:active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <RefreshCw className={`h-3 w-3 ${continuingId === m.id ? "animate-spin" : ""}`} />
-                          {continuingId === m.id ? "Menyambung…" : "Lanjutkan"}
-                        </button>
+                        {m.id === lastId && (
+                          <button
+                            onClick={() => handleRegenerate(m)}
+                            disabled={regeneratingId !== null || Boolean(noteBusy[m.id])}
+                            title="Ulangi jawaban Lode dari context yang sama — jawaban lama diganti"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-akari/25 bg-akari/5 px-2.5 py-1 text-[11px] font-bold text-akari transition enabled:hover:bg-akari/15 enabled:active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <RefreshCw className={`h-3 w-3 ${regeneratingId === m.id ? "animate-spin" : ""}`} />
+                            {regeneratingId === m.id ? "Mengulang…" : "Ulangi"}
+                          </button>
+                        )}
                         <button
                           onClick={() => handleMakeNote(m.id)}
                           disabled={Boolean(noteBusy[m.id])}

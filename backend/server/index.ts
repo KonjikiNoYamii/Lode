@@ -6,7 +6,6 @@ import path from "node:path";
 import {
   addMemory,
   addMessage,
-  appendMessageContent,
   countMessages,
   createConversation,
   createPlanItem,
@@ -32,14 +31,17 @@ import {
   patchConversation,
   patchPlanItem,
   recordFileRevision,
+  replaceMessage,
   patchTopic,
   runMaintenance,
+  setTopicNoteRel,
   updateProfile,
   upsertWorkspaceFile,
   writeTopic,
   type ConversationExportPayload,
   exportConversationContext,
   importConversationContext,
+  type Profile,
 } from "../lib/db";
 import {
   aiRequestHeaders,
@@ -63,6 +65,7 @@ import {
   normalizeMode,
   stripModeMarkers,
   type LearnMode,
+  type ModeChoice,
 } from "../lib/mode";
 import { type FileRevision, type PlanStatus } from "../lib/db";
 import { diffLines } from "../lib/diff";
@@ -89,6 +92,22 @@ import {
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.BACKEND_HOST?.trim() || "127.0.0.1";
 const AI_ERROR_MARKER = "@@ai-error:";
+// Marker "masih ada bagian berikutnya" — mentor menutup pesannya dengan
+// @@more("judul bagian berikutnya"); sistem otomatis melanjutkan giliran
+// tanpa pelajar mengetik apa pun. Semua bagian disimpan sebagai pesan terpisah.
+const MORE_RE = /@@more\(\s*"([^"]*)"\s*\)/;
+// Batas aman: total bagian auto per giliran (satu /api/chat normal + lanjutan).
+const MAX_PARTS_PER_TURN = 4;
+const PART_BOUNDARY = "\n@@more\n";
+// Output materi wajib segini panjang sebelum sistem menembak lanjutan soal
+// otomatis — jawaban singkat (sapaan, pertanyaan teknis pendek) tidak memicu.
+const SOAL_MIN_CHARS = 400;
+// Instruksi sintetis untuk lanjutan continuePart: bagian materi berikutnya,
+// atau fase SOAL otomatis yang dipicu sistem setelah blok materi selesai.
+const MATERI_CONT_TAIL =
+  "[LANJUTAN OTOMATIS SISTEM — ini bukan pesan pelajar, jangan ditampilkan, jangan dipanggil pelajar] Lanjutkan ke bagian berikutnya dari materi yang sedang kamu ajarkan, SESUAI URUTAN yang sudah kamu janjikan di pesan terakhirmu. Jangan mengulang materi bagian sebelumnya — yang sudah tertulis di atas dianggap sudah dibaca pelajar. Ajarkan bagian ini dengan lengkap untuk bagian itu (apa & kenapa, cara kerja langkah demi langkah, contoh yang bisa dijalankan, 1 kesalahan umum) lalu berhenti. Jika MASIH ada bagian berikutnya setelah ini (total bagian maksimal 3 per giliran), akhiri jawabanmu dengan baris @@more(\"judul bagian berikutnya\"); jika ini bagian TERAKHIR, jangan tulis @@more.";
+const SOAL_CONT_TAIL =
+  "[LANJUTAN OTOMATIS SISTEM — ini bukan pesan pelajar, jangan ditampilkan, jangan dipanggil pelajar] SEKARANG KAMU DI FASE SOAL: sistem meminta output soal setelah blok materi selesai. Keluarkan SATU output yang berisi HANYA latihan/soal tentang materi yang baru saja kamu ajarkan di giliran ini — tanpa menjelaskan ulang materinya, tanpa materi baru. Kalau di giliran ini TIDAK ada materi baru (mis. kamu hanya menjawab pertanyaan status/meta dari pelajar), jangan mengarang materi: buatlah soal RECALL/penguatan tentang topik yang masih berstatus learning/stuck di progress. Isi 2-4 butir campuran: 1 RECALL singkat tentang materi blok SEBELUMNYA supaya nyambung dan benar-benar diulang, 1-2 butir tentang konsep inti blok ini, dan untuk keterampilan praktis/koding utamakan TUGAS PRAKTIK konkret yang dikerjakan sendiri (buat file, tulis script, jalankan, perbaiki error) — bukan kuis pilihan ganda pendek yang membosankan. JANGAN pernah menguji materi yang belum diajarkan. JANGAN menulis solusi/jawaban. JANGAN pakai @@more. Tunggu pelajar mengerjakan.";
 const DIST_PATH = path.resolve(
   process.env.FRONTEND_DIST ??
     path.join(process.cwd(), "..", "frontend", "dist"),
@@ -120,8 +139,14 @@ const REFUSAL_PATTERNS = [
   /tidak diprogram untuk (itu|hal tersebut|hal ini|melakukan)/i,
   /saya tidak (bisa|dapat) (membantu|memahami|merespons)/i,
   /saya (bukan|hanya) (asisten|ai|kecerdasan buatan)/i,
-  /\b(i am|i'm) (just )?(a|an) (language )?(model|ai)\b/i,
-  /\bas an? (ai|language model)\b/i,
+  // Variasi "Saya adalah AI / asisten berbasis teks, ... di luar kemampuan/kendali saya"
+  /saya (adalah|ini|sebuah|cuma|hanya)?\s*(ai|assistant|asisten|kecerdasan buatan|model bahasa|bot|chatbot)\b/i,
+  /\b(ai|asisten|assistant|model bahasa|chatbot)\b[^.]{0,40}\b(di luar|bukan (di )?bidang|tidak (bisa|dapat|mampu|memiliki)|tidak punya|tanpa) (kemampuan|kendali|akses|kemampuan saya)/i,
+  /(di luar|bukan) (kemampuan|kendali|jangkauan|kompetensi) saya/i,
+  /sebagai (ai|asisten|model bahasa|chatbot)/i,
+  /i('m| am)( just)? (a|an) (ai|language model|assistant|text-based)/i,
+  /\bas an? (ai|language model|assistant)\b/i,
+  /i (cannot|can't|am unable to|don't have the ability to) (help|assist|do|access)/i,
 ];
 
 function looksLikeRefusal(text: string): boolean {
@@ -330,7 +355,8 @@ function stripMarkers(
   const base = stripModeMarkers(
     text
       .replace(/@@read\("[^"]*"\)/g, "")
-      .replace(/@@mood\("[^"]*"\)/g, ""),
+      .replace(/@@mood\("[^"]*"\)/g, "")
+      .replace(/@@more\("[^"]*"\)/g, ""),
     modeSink,
   );
   return stripPlanMarkers(base, planSink);
@@ -344,6 +370,7 @@ const MARKER_NAMES = [
   "mode",
   "plan",
   "files",
+  "more",
   "end",
 ];
 const MARKER_TAIL_MAX = 200;
@@ -410,6 +437,112 @@ function effectiveModeFor(
   return choice.mode === "auto" ? "konsep" : choice.mode;
 }
 
+interface ChatContext {
+  topics: Awaited<ReturnType<typeof listTopicsByConversation>>;
+  memories: Awaited<ReturnType<typeof listMemoriesByConversation>>;
+  folder: string;
+  modeChoice: ModeChoice;
+  turnMode: LearnMode;
+  system: string;
+  planItems: Awaited<ReturnType<typeof listPlanItems>>;
+  planIds: Set<number>;
+  allowWrite: boolean;
+  workspaceCtx: string;
+  authoredCtx: string;
+}
+
+/**
+ * Bangun system prompt & konteks giliran (workspace, berkas tulisan Lode,
+ * rencana, mode). Dipakai untuk giliran normal maupun lanjutan otomatis
+ * (continuePart) supaya prompt tidak melenceng antara keduanya.
+ */
+async function buildChatContext(
+  cid: number,
+  profile: Profile,
+  conv: { mode: string; ai_mode: string; folder: string },
+  message: string,
+  options: { forceMode?: LearnMode | null; autoPhase?: "soal" | "" } = {},
+): Promise<ChatContext> {
+  const topics = listTopicsByConversation(cid);
+  const memories = listMemoriesByConversation(cid);
+  const folder = String(conv?.folder ?? "").trim();
+  const allowWrite = profile.ws_allow_write !== 0;
+
+  const forced = options.forceMode && options.forceMode !== "auto" ? options.forceMode : null;
+  const modeChoice: ModeChoice =
+    options.autoPhase === "soal"
+      ? { mode: "latihan", locked: false, reason: "fase soal otomatis setelah blok materi" }
+      : chooseMode({
+          message,
+          mode: forced ?? normalizeMode(conv?.mode),
+          aiMode: conv?.ai_mode ?? "",
+          hasFolder: Boolean(folder),
+          stuckCount: topics.filter((t) => t.status === "stuck").length,
+          mastery: topics.reduce((max, t) => Math.max(max, t.mastery), 0),
+        });
+  const turnMode: LearnMode = modeChoice.mode === "auto" ? "konsep" : modeChoice.mode;
+  const autoFlow = normalizeMode(conv?.mode) === "auto";
+
+  const wsMaxDepth = clampInt(profile.ws_max_depth, 1, 12, 7);
+  const wsMaxFiles = clampInt(profile.ws_max_files, 10, 3000, 350);
+  const wsAutoKb = clampInt(profile.ws_auto_kb, 0, 5000, 0);
+
+  let workspaceCtx = "";
+  if (folder) {
+    try {
+      workspaceCtx = await buildWorkspaceContext(folder, {
+        maxDepth: wsMaxDepth,
+        maxEntries: wsMaxFiles,
+        autoDumpKB: wsAutoKb,
+      });
+    } catch {
+      workspaceCtx = `[Folder workspace "${folder}" tidak bisa dibaca — pastikan path-nya benar.]`;
+    }
+  }
+
+  let authoredCtx = "";
+  if (folder) {
+    const records = listWorkspaceFiles(cid);
+    try {
+      authoredCtx = await buildAuthoredFilesContext(
+        folder,
+        records.map((r) => r.rel),
+      );
+    } catch {
+      authoredCtx = "";
+    }
+  }
+
+  const planItems = listPlanItems(cid);
+  const planIds = new Set(planItems.map((i) => i.id));
+  const system = buildSystemPrompt(
+    profile,
+    topics,
+    memories,
+    workspaceCtx || "",
+    allowWrite,
+    authoredCtx,
+    buildPlanContext(planItems),
+    buildModeContext(turnMode, modeChoice.reason, modeChoice.locked, {
+      autoFlow,
+      phase: options.autoPhase === "soal" ? "soal" : undefined,
+    }),
+  );
+  return {
+    topics,
+    memories,
+    folder,
+    modeChoice,
+    turnMode,
+    system,
+    planItems,
+    planIds,
+    allowWrite,
+    workspaceCtx,
+    authoredCtx,
+  };
+}
+
 /**
  * Catat isi lama setiap file yang berubah supaya bisa di-undo dari panel riwayat.
  * Folder baru (rel berakhiran "/") dan file yang isinya sama tidak dicatat.
@@ -463,6 +596,100 @@ function deriveFallbackNotePath(text: string): string {
     .slice(0, 60);
   if (!base) base = "catatan";
   return `${base}.md`;
+}
+
+/**
+ * Auto-note: kumpulkan semua output mentor sejak pesan pelajar terakhir, lalu
+ * MERGE ke SATU berkas catatan milik topik aktif (topics.note_rel). Dipanggil
+ * klien setelah blok soal + memory/update selesai. Gagal = diam (null) — tidak
+ * pernah menimpa/membuat berkas sembarangan.
+ */
+async function generateAutoNote(
+  cid: number,
+  folder: string,
+  profile: Profile,
+): Promise<string | null> {
+  const msgs = listMessages(cid);
+  let lastUser = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]?.role === "user") {
+      lastUser = i;
+      break;
+    }
+  }
+  const outputs = msgs
+    .slice(lastUser + 1)
+    .filter((m) => m.role === "assistant" && m.content.trim());
+  if (outputs.length === 0) return null;
+  const block = outputs
+    .map((m) => m.content)
+    .join("\n\n---\n\n")
+    .slice(0, 40_000);
+
+  // Satu file per topik: topik yang sedang diperkuat, atau topik non-mastered
+  // terbaru. Tanpa topik → lewati (hasil memory/update belum siap).
+  const topics = listTopicsByConversation(cid);
+  const topic =
+    topics.find((t) => t.status === "learning" || t.status === "stuck") ??
+    topics.find((t) => t.status !== "mastered") ??
+    null;
+  if (!topic) return null;
+
+  const noteRel = String(topic.note_rel ?? "").trim();
+  const oldFile = noteRel ? await readWorkspaceFile(folder, noteRel).catch(() => null) : null;
+  const existing = noteRel ? { rel: noteRel, content: oldFile?.content ?? "" } : null;
+
+  const workspaceCtx = await buildWorkspaceContext(folder, {
+    maxDepth: clampInt(profile.ws_max_depth, 1, 12, 7),
+    maxEntries: clampInt(profile.ws_max_files, 10, 3000, 350),
+    autoDumpKB: 0,
+  }).catch(() => "");
+
+  const prompt = buildNotePrompt({ profile, output: block, workspaceCtx, existing });
+  let text = await chatText([{ role: "user", content: prompt }]);
+  let parsed = parseAgentBlocks(text);
+  if (parsed.writes.length === 0) {
+    const fenced = extractNoteWriteFromFence(text);
+    if (fenced) {
+      parsed.writes.push(fenced);
+      parsed.clean = "";
+    }
+  }
+  if (parsed.writes.length === 0) {
+    // Retry sekali dengan instruksi tegas (path wajib persis untuk merge).
+    try {
+      const retryPrompt = existing
+        ? `Jawabanmu TADI tidak memakai blok berkas. Balas HANYA dengan SATU blok, tanpa teks lain apa pun:\n@@write("${existing.rel}")\n<isi berkas LENGKAP hasil gabungan lama + baru>\n@@end`
+        : 'Jawabanmu TADI tidak memakai blok berkas. Balas HANYA dengan SATU blok, tanpa teks lain apa pun:\n@@write("path/relatif/di-folder-workspace/NamaCatatan.md")\n<isi catatan lengkap>\n@@end';
+      text = await chatText([
+        { role: "user", content: prompt },
+        { role: "assistant", content: text },
+        { role: "user", content: retryPrompt },
+      ]);
+      parsed = parseAgentBlocks(text);
+      if (parsed.writes.length === 0) {
+        const fenced = extractNoteWriteFromFence(text);
+        if (fenced) {
+          parsed.writes.push(fenced);
+          parsed.clean = "";
+        }
+      }
+    } catch {
+      return null;
+    }
+  }
+  if (parsed.writes.length === 0) return null;
+
+  // Paksa SATU file per topik: path harus persis milik topik ini.
+  parsed.writes = [{ ...parsed.writes[0], rel: existing ? existing.rel : parsed.writes[0].rel }];
+
+  const results = await applyWorkspaceWrites(folder, parsed);
+  const ok = results.filter((r) => !r.error && !r.rel.endsWith("/") && r.next !== undefined);
+  if (ok.length === 0) return null;
+  for (const r of ok) upsertWorkspaceFile(cid, r.rel);
+  recordFileWrites(cid, results, "note");
+  setTopicNoteRel(topic.id, ok[0].rel);
+  return ok[0].rel;
 }
 
 function summarizeRevision(rev: FileRevision) {
@@ -538,8 +765,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   // ---------- POST /api/chat (streaming + agent read) ----------
   if (method === "POST" && p === "/api/chat") {
     const body = await readJson(req);
-    const message = String(body.message ?? "").trim();
-    if (!message) return sendJson(res, 400, { error: "Pesan kosong" });
+    // continuePart: lanjutan otomatis satu giliran tanpa pesan user baru
+    // (dikendalikan klien setelah menerima sinyal @@more).
+    const isCont = body.continuePart === true;
+    const regenId =
+      body.regenerateMessageId === undefined || body.regenerateMessageId === null ||
+      body.regenerateMessageId === ""
+        ? 0
+        : Number(body.regenerateMessageId);
+    if (!Number.isSafeInteger(regenId) || regenId < 0) {
+      return sendJson(res, 400, { error: "regenerateMessageId tidak valid" });
+    }
+    let message = String(body.message ?? "").trim();
+    if (!message && !regenId && !isCont) return sendJson(res, 400, { error: "Pesan kosong" });
 
     const requestedCid =
       body.conversationId === undefined || body.conversationId === null || body.conversationId === ""
@@ -547,6 +785,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         : Number(body.conversationId);
     if (!Number.isSafeInteger(requestedCid) || requestedCid < 0) {
       return sendJson(res, 400, { error: "conversationId tidak valid" });
+    }
+    if (regenId && !requestedCid) {
+      return sendJson(res, 400, { error: "conversationId wajib untuk ulangi" });
+    }
+    if (isCont && !requestedCid) {
+      return sendJson(res, 400, { error: "conversationId wajib untuk lanjutan" });
     }
     const clientMsgId =
       typeof body.clientMsgId === "string" && body.clientMsgId.trim()
@@ -582,69 +826,80 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         patchConversation(cid, { ai_session: resumeSession });
       }
     }
-    addMessage(cid, "user", message, "", "", clientMsgId || undefined);
+    // "Ulangi" (regenerate): ulangi giliran terakhir dari jawaban AI yang sama.
+    // Tidak menambah pesan user baru — jawaban lama diganti di tempat setelah
+    // stream selesai, jadi context (topik/memori/history) tidak terganggu.
+    let regenTarget: { id: number } | null = null;
+    if (regenId) {
+      if (!cid) return sendJson(res, 400, { error: "conversationId wajib untuk ulangi" });
+      const all = listMessages(cid);
+      const last = all[all.length - 1];
+      const target = getMessage(regenId);
+      if (!target || target.conversation_id !== cid || target.role !== "assistant") {
+        return sendJson(res, 400, { error: "Pesan itu bukan jawaban AI" });
+      }
+      if (!last || last.id !== regenId) {
+        return sendJson(res, 400, { error: "Hanya jawaban AI terakhir yang bisa diulang" });
+      }
+      // Cari pesan user TERDEKAT sebelum target (target bisa bagian dari
+      // rangkaian lanjutan otomatis yang dikelilingi jawaban AI lain).
+      const idx = all.findIndex((m) => m.id === regenId);
+      let asker: (typeof all)[number] | undefined;
+      for (let i = idx - 1; i >= 0; i--) {
+        if (all[i]?.role === "user") {
+          asker = all[i];
+          break;
+        }
+      }
+      if (!asker) {
+        return sendJson(res, 400, { error: "Tidak ada pertanyaan yang bisa diulang" });
+      }
+      message = String(asker.content ?? "").trim();
+      if (!message) return sendJson(res, 400, { error: "Pertanyaan yang diulang kosong" });
+      regenTarget = { id: regenId };
+    }
+    if (!regenTarget && !isCont) addMessage(cid, "user", message, "", "", clientMsgId || undefined);
 
     const profile = getProfile();
-    const topics = listTopicsByConversation(cid);
-    const memories = listMemoriesByConversation(cid);
     const ACTIVE_CHAT_WINDOW = 50;
-    const history = sanitizeStale(listMessages(cid)).slice(-ACTIVE_CHAT_WINDOW);
+    // Saat regenerate, jawaban lama TIDAK ikut dikirim sebagai history: model
+    // harus menjawab ulang dari pertanyaan, bukan melanjutkan jawaban lama.
+    const history0 = sanitizeStale(listMessages(cid)).slice(-ACTIVE_CHAT_WINDOW);
+    const history = regenTarget
+      ? history0.filter((m) => m.id !== regenTarget.id)
+      : history0;
 
     const conv = getConversation(cid);
-    const modeChoice = chooseMode({
-      message,
-      mode: normalizeMode(conv?.mode),
-      aiMode: conv?.ai_mode ?? "",
-      hasFolder: Boolean(folder),
-      stuckCount: topics.filter((t) => t.status === "stuck").length,
-      mastery: topics.reduce((max, t) => Math.max(max, t.mastery), 0),
-    });
-    const turnMode: LearnMode = modeChoice.mode === "auto" ? "konsep" : modeChoice.mode;
+    // Fase alur auto: auto_phase='soal' berarti output soal sudah dipicu di
+    // giliran sebelumnya dan lanjutan ini (continuePart) yang menagihnya.
+    // Konsumsi sekarang; fase basi dari giliran lama dibersihkan di giliran baru.
+    const autoPhase: "soal" | "" =
+      isCont && String(conv?.auto_phase ?? "") === "soal" ? "soal" : "";
+    if (autoPhase === "soal") patchConversation(cid, { auto_phase: "" });
+    else if (!isCont && conv && conv.auto_phase) patchConversation(cid, { auto_phase: "" });
+    // continuePart: lanjutkan bagian berikutnya tanpa pesan user baru. Instruksi
+    // sintetis dikirim sebagai pesan user terakhir (tidak disimpan ke DB) agar
+    // model meneruskan urutan materi yang sudah dijanjikannya.
+    const contTail: ChatItem[] = isCont
+      ? [
+          {
+            role: "user",
+            content: autoPhase === "soal" ? SOAL_CONT_TAIL : MATERI_CONT_TAIL,
+          },
+        ]
+      : [];
 
-    const wsMaxDepth = clampInt(profile.ws_max_depth, 1, 12, 7);
-    const wsMaxFiles = clampInt(profile.ws_max_files, 10, 3000, 350);
-    const wsAutoKb = clampInt(profile.ws_auto_kb, 0, 5000, 0);
-    const allowWrite = profile.ws_allow_write !== 0;
-
-    let workspaceCtx = "";
-    if (folder) {
-      try {
-        workspaceCtx = await buildWorkspaceContext(folder, {
-          maxDepth: wsMaxDepth,
-          maxEntries: wsMaxFiles,
-          autoDumpKB: wsAutoKb,
-        });
-      } catch {
-        workspaceCtx = `[Folder workspace "${folder}" tidak bisa dibaca — pastikan path-nya benar.]`;
-      }
-    }
-
-    let authoredCtx = "";
-    if (folder) {
-      const records = listWorkspaceFiles(cid);
-      try {
-        authoredCtx = await buildAuthoredFilesContext(
-          folder,
-          records.map((r: any) => r.rel),
-        );
-      } catch {
-        authoredCtx = "";
-      }
-    }
-
-    const planItems = listPlanItems(cid);
-    const planIds = new Set(planItems.map((i: any) => i.id));
-
-    const system = buildSystemPrompt(
-      profile,
-      topics,
-      memories,
-      workspaceCtx || "",
-      allowWrite,
-      authoredCtx,
-      buildPlanContext(planItems),
-      buildModeContext(turnMode, modeChoice.reason, modeChoice.locked),
-    );
+    // Mode lanjutan mengikuti mode efektif giliran sebelumnya (dikirim klien),
+    // supaya rangkaian tidak belok mode di tengah jalan. Fase soal otomatis
+    // selalu memaksa latihan — giliran ini murni menagih output soal.
+    const forceMode = isCont
+      ? autoPhase === "soal"
+        ? "latihan"
+        : normalizeMode(String(body.mode ?? ""))
+      : null;
+    const ctx = await buildChatContext(cid, profile, conv!, message, { forceMode, autoPhase });
+    folder = ctx.folder;
+    const { modeChoice, turnMode, system, planIds, allowWrite } = ctx;
 
     const planSink = new Map<number, PlanStatus>();
     const modeSink = new Map<LearnMode, LearnMode>();
@@ -652,11 +907,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const round1Payload = (): ChatItem[] => {
       const items: ChatItem[] = [{ role: "system", content: system }];
       for (const m of history) items.push({ role: m.role, content: m.content });
+      for (const t of contTail) items.push(t);
       return items;
     };
     const round2Payload = (extra: string): ChatItem[] => {
       const items: ChatItem[] = [{ role: "system", content: system }];
       for (const m of history) items.push({ role: m.role, content: m.content });
+      for (const t of contTail) items.push(t);
       items.push({ role: "user", content: extra });
       return items;
     };
@@ -906,6 +1163,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
 
     let finalText = stripMarkers(parsed.clean, planSink, modeSink).trim();
+    // Teks final SEBELUM strip marker — dipakai untuk mendeteksi @@more
+    // (marker "masih ada bagian berikutnya" untuk lanjut otomatis).
+    let finalRaw = parsed.clean;
 
     // Round 2 hanya aman kalau jawaban round 1 belum sempat keluar ke layar.
     if (round1.markers.size > 0 && !round1.committed) {
@@ -956,6 +1216,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         } else {
           finalText = stripMarkers(r2Parsed.clean, planSink, modeSink).trim() || finalText;
         }
+        finalRaw = r2Parsed.clean || finalRaw;
         if (r2.streamError) providerError = r2.streamError;
       } catch (err) {
         providerError = err instanceof Error ? err.message : "Gagal membaca file";
@@ -1063,6 +1324,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
         const retryParsed = parseAgentBlocks(rr.text);
         if (retryParsed.clean.trim() && !looksLikeRefusal(retryParsed.clean)) {
           finalText = stripMarkers(retryParsed.clean, planSink, modeSink).trim();
+          finalRaw = retryParsed.clean || finalRaw;
           if (folder && allowWrite && (retryParsed.writes.length || retryParsed.mkdirs.length)) {
             const results = await applyWorkspaceWrites(folder, retryParsed);
             const ok = results.filter((r) => !r.error && !r.rel.endsWith("/"));
@@ -1099,6 +1361,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (aiMode && isLearnMode(aiMode)) {
       patchConversation(cid, { ai_mode: aiMode });
     }
+    // Mode jawaban mentor SEBELUM giliran ini (sebelum disimpan) — dipakai
+    // meredam trigger soal tepat setelah output soal.
+    const prevAssistantMode =
+      [...listMessages(cid)].reverse().find((m) => m.role === "assistant")?.mode ?? "";
     if (finalText && !res.writableEnded) {
       const { mood, clean: moodClean } = finalMood(finalText);
       finalText = moodClean.trim();
@@ -1113,7 +1379,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           storedText = sanitizeText(finalText);
           if (notice) storedText = `${storedText}${storedText.endsWith("\n") ? "" : "\n"}\n${notice}`;
         }
-        addMessage(cid, "assistant", storedText, mood, effectiveMode);
+        if (regenTarget) {
+          if (!replaceMessage(cid, regenTarget.id, storedText, mood, effectiveMode)) {
+            // Jawaban lama tidak ketemu (mis. percakapan terhapus saat stream
+            // berjalan) — jangan diam: simpan sebagai pesan baru supaya tidak
+            // kehilangan hasil. Jarang terjadi.
+            addMessage(cid, "assistant", storedText, mood, effectiveMode);
+          }
+        } else {
+          addMessage(cid, "assistant", storedText, mood, effectiveMode);
+        }
         res.write(`\n@@mood:${mood}\n`);
         res.write(`@@mode:${effectiveMode}\n`);
         for (const [pid, status] of planUpdates) {
@@ -1141,106 +1416,32 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     // Simpan thread gemini agar percakapan berlanjut tanpa mengulang riwayat.
     // (Gateway stateless; ai_thread tidak pernah dibaca ulang — tidak disimpan.)
 
-    if (!res.writableEnded) res.end();
-    return;
-  }
-
-  // ---------- POST /api/chat/continue (sambung jawaban AI yang terpotong) ----------
-  if (method === "POST" && p === "/api/chat/continue") {
-    const body = await readJson(req);
-    const cid = Number(body.conversationId);
-    const messageId = Number(body.messageId);
-    if (!Number.isSafeInteger(cid) || !Number.isSafeInteger(messageId)) {
-      return sendJson(res, 400, { error: "conversationId dan messageId wajib diisi" });
+    // Sinyal @@more: mentor masih punya bagian berikutnya → klien otomatis
+    // menembak /api/chat (continuePart) TANPA pelajar mengetik apa pun.
+    const hasMore = MORE_RE.test(finalRaw) && !clientAbort.signal.aborted && Boolean(finalText);
+    // Alur auto: blok materi selesai (tanpa @@more, output substantial) →
+    // tembak lanjutan SOAL otomatis. Diredam tepat setelah output soal
+    // (prevMode 'latihan') supaya giliran penilaian tidak langsung menagih
+    // soal lagi, dan setelah regen/beralih mode.
+    let fireSoal = false;
+    if (
+      !hasMore &&
+      !regenTarget &&
+      !providerError &&
+      !clientAbort.signal.aborted &&
+      Boolean(finalText) &&
+      autoPhase !== "soal" &&
+      effectiveMode === "konsep" &&
+      normalizeMode(String(conv?.mode ?? "")) === "auto" &&
+      finalText.length >= SOAL_MIN_CHARS
+    ) {
+      fireSoal = prevAssistantMode !== "latihan";
     }
-    const conv = getConversation(cid);
-    if (!conv) return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
-    const target = getMessage(messageId);
-    if (!target || target.conversation_id !== cid || target.role !== "assistant") {
-      return sendJson(res, 400, { error: "Pesan itu bukan jawaban AI" });
-    }
-    const base = (target.content ?? "").replace(/\r\n/g, "\n").trim();
-    if (!base) return sendJson(res, 400, { error: "Jawaban kosong" });
-
-    const history = listMessages(cid).filter(
-      (m) => m.role === "user" || m.role === "assistant",
-    );
-    const targetIdx = history.findIndex((m) => m.id === messageId);
-    const upTo = history.slice(0, targetIdx + 1);
-    const tail = base.slice(-240);
-    const instruction =
-      'Jawabanmu sebelumnya terpotong di tengah karena batas panjang. Lanjutkan TEPAT dari ' +
-      "karakter terakhir jawabanmu di atas, dalam bahasa dan gaya yang sama. JANGAN mengulang, " +
-      "merangkum, atau menjelaskan ulang bagian mana pun yang sudah tertulis — materi sebelumnya " +
-      `sudah selesai dijelaskan. Jawabanmu tadi berakhir dengan: "…${tail}"\n\n` +
-      "Lanjutkan langsung dari titik itu, tanpa pembukaan ulang.";
-    const items: ChatItem[] = upTo.map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content ?? "",
-    }));
-    items.push({ role: "user", content: instruction });
-
-    const headers: Record<string, string> = {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-cache",
-      "X-Conversation-Id": String(cid),
-      "X-Message-Id": String(messageId),
-    };
-
-    const clientAbort = new AbortController();
-    res.on("close", () => {
-      if (!res.writableEnded) clientAbort.abort();
-    });
-
-    let upstream: ReadableStream<Uint8Array>;
-    try {
-      upstream = await streamChat(
-        items,
-        null,
-        String(conv.ai_session ?? ""),
-        clientAbort.signal,
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return sendJson(
-        res,
-        502,
-        {
-          error: "Tidak bisa terhubung ke server AI untuk menyambung jawaban.",
-          detail: msg,
-        },
-        { "X-Conversation-Id": String(cid) },
-      );
+    if ((hasMore || fireSoal) && !res.writableEnded) {
+      if (fireSoal) patchConversation(cid, { auto_phase: "soal" });
+      res.write(PART_BOUNDARY);
     }
 
-    res.writeHead(200, headers);
-    const planSink = new Map<number, PlanStatus>();
-    const modeSink = new Map<LearnMode, LearnMode>();
-    const strip = createMarkerStripper(planSink, modeSink);
-    const r = await forwardSse(
-      upstream,
-      (d) => {
-        if (!res.writableEnded) res.write(strip.feed(d));
-      },
-      () => {
-        strip.reset();
-        if (!res.writableEnded) res.write("\n@@reset\n");
-      },
-    );
-    if (!res.writableEnded) res.write(strip.flush());
-
-    if (r.streamError) {
-      writeAiError(res, r.streamError);
-      if (!res.writableEnded) res.end();
-      return;
-    }
-    const cleaned = stripMarkers(r.text, planSink, modeSink).trim();
-    if (!cleaned) {
-      writeAiError(res, "Lode tidak menghasilkan sambungan. Jawaban lama tetap utuh.");
-      if (!res.writableEnded) res.end();
-      return;
-    }
-    appendMessageContent(messageId, cleaned);
     if (!res.writableEnded) res.end();
     return;
   }
@@ -1864,6 +2065,38 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           ? `${failed.length} berkas gagal ditulis.`
           : "",
     });
+  }
+
+  // ---------- POST /api/notes/auto (otomatis: merge catatan topik setelah blok belajar) ----------
+  if (method === "POST" && p === "/api/notes/auto") {
+    const body = await readJson(req);
+    const cid = Number(body.conversationId) || 0;
+    if (!cid) return sendJson(res, 400, { error: "conversationId diperlukan" });
+    const conv = getConversation(cid);
+    if (!conv) return sendJson(res, 404, { error: "Percakapan tidak ditemukan" });
+    const folder = String(conv.folder ?? "").trim();
+    const profile = getProfile();
+    // Prasyarat belum terpenuhi → lewati diam-diam (ini proses latar belakang).
+    if (!folder || profile.ws_allow_write === 0) {
+      return sendJson(res, 200, { ok: false, files: [], skipped: true });
+    }
+
+    const chatTurn = beginChatTurn();
+    await chatTurn.ready;
+    if (res.destroyed) {
+      chatTurn.release();
+      return;
+    }
+    res.once("finish", chatTurn.release);
+    res.once("close", chatTurn.release);
+
+    try {
+      const rel = await generateAutoNote(cid, folder, profile);
+      return sendJson(res, 200, { ok: Boolean(rel), files: rel ? [rel] : [] });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return sendJson(res, 502, { error: "Gagal update catatan otomatis.", detail });
+    }
   }
 
   // ---------- maintenance ----------
