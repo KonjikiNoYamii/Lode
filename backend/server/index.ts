@@ -1449,7 +1449,40 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   // ---------- GET /api/health (tes koneksi AI) ----------
   if (method === "GET" && p === "/api/health") {
     const profile = getProfile();
-    const upstreamUrl = `${profile.ai_base_url.replace(/\/v1\/?$/, "")}/health`;
+    // Provider bergaya Gemini Server punya endpoint /health sendiri. Provider
+    // OpenAI-compatible murni (Groq, OpenRouter, dsb.) tidak, jadi kalau /health
+    // tidak ada kita jatuh ke tes chat kecil supaya indikator koneksi tetap jujur.
+    const base = profile.ai_base_url.replace(/\/+$/, "").replace(/\/v1$/, "");
+    const upstreamUrl = `${base}/health`;
+
+    async function chatProbe(): Promise<{ ok: boolean; status: number | null; body: unknown; error?: string }> {
+      try {
+        const r = await fetch(`${profile.ai_base_url.replace(/\/+$/, "")}/chat/completions`, {
+          method: "POST",
+          headers: aiRequestHeaders(),
+          body: JSON.stringify({
+            messages: [{ role: "user", content: "ping" }],
+            max_tokens: 1,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        const body = await r.json().catch(() => null);
+        if (r.ok) return { ok: true, status: r.status, body };
+        const detail =
+          body && typeof body === "object" && "error" in body
+            ? (body as { error?: { message?: string } }).error?.message
+            : undefined;
+        return { ok: false, status: r.status, body, error: detail ?? `HTTP ${r.status}` };
+      } catch (err) {
+        return {
+          ok: false,
+          status: null,
+          body: null,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
     try {
       const r = await fetch(upstreamUrl, {
         headers: aiRequestHeaders(),
@@ -1457,6 +1490,18 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       });
       const body = await r.json().catch(() => null);
       const health = body as { client_ready?: boolean } | null;
+      // 404/405 = provider ini tidak punya /health; pakai tes chat sebagai gantinya.
+      if (r.status === 404 || r.status === 405) {
+        const probe = await chatProbe();
+        return sendJson(res, 200, {
+          ok: probe.ok,
+          upstream_status: probe.status,
+          upstream_url: `${profile.ai_base_url.replace(/\/+$/, "")}/chat/completions`,
+          body: probe.body,
+          error: probe.error,
+          via: "chat-probe",
+        });
+      }
       return sendJson(res, 200, {
         ok: r.ok && health?.client_ready !== false,
         upstream_status: r.status,

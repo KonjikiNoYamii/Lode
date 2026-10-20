@@ -129,14 +129,20 @@ export default function SettingsForm() {
         upstream_url: string;
         upstream_status: number | null;
         error?: string;
+        via?: string;
         body?: { status?: string; client_ready?: boolean } | null;
       }>("/api/health");
       if (r.ok) {
         setTest({
           ok: true,
-          text: `Server AI hidup (status ${r.upstream_status}). ${
-            r.body?.client_ready === false ? "Tapi server AI belum siap — cek API key/konfigurasi server." : ""
-          }`,
+          text:
+            r.via === "chat-probe"
+              ? `Koneksi AI aktif (tes chat ke ${r.upstream_url}).`
+              : `Server AI hidup (status ${r.upstream_status}). ${
+                  r.body?.client_ready === false
+                    ? "Tapi server AI belum siap — cek API key/konfigurasi server."
+                    : ""
+                }`,
         });
       } else {
         setTest({
