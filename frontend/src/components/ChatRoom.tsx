@@ -1263,9 +1263,15 @@ export default function ChatRoom({
         <div ref={endRef} />
       </div>
 
-      {/* Scroll buttons (above composer) */}
+      {/* Scroll buttons (beside right panel) */}
       {(showScrollToTop || showScrollToBottom) && (
-        <div className="absolute bottom-44 right-4 z-30 flex flex-col gap-2 sm:right-6">
+        <div
+          className={`absolute bottom-44 z-30 flex flex-col gap-2 transition-[right] duration-300 ease-in-out ${
+            rightPanelOpen
+              ? "right-4 md:right-[calc(24rem+1rem)] lg:right-[calc(420px+1rem)] xl:right-[calc(460px+1rem)]"
+              : "right-4 sm:right-6"
+          }`}
+        >
           {showScrollToTop && (
             <button
             onClick={() => scrollNearest("up")}
