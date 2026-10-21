@@ -408,7 +408,7 @@ export default function ChatRoom({
     }
   };
 
-  const smoothScrollTo = (el: HTMLElement, to: number, duration = 380) => {
+  const smoothScrollTo = (el: HTMLElement, to: number, duration = 520) => {
     const start = el.scrollTop;
     const change = to - start;
     const startTime = performance.now();
