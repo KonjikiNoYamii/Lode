@@ -408,6 +408,20 @@ export default function ChatRoom({
     }
   };
 
+  const smoothScrollTo = (el: HTMLElement, to: number, duration = 380) => {
+    const start = el.scrollTop;
+    const change = to - start;
+    const startTime = performance.now();
+    const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t);
+    const animate = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      el.scrollTop = start + change * easeInOut(progress);
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  };
+
   const scrollNearest = (dir: "up" | "down") => {
     const el = listRef.current;
     if (!el) return;
@@ -416,14 +430,13 @@ export default function ChatRoom({
     el.classList.add("list-scroll-anim");
     const items = Array.from(el.querySelectorAll<HTMLElement>(".msg-item"));
     if (!items.length) {
-      if (dir === "up") el.scrollTo({ top: 0, behavior: "smooth" });
-      else el.scrollTo({ top: el.scrollHeight - el.clientHeight, behavior: "smooth" });
+      if (dir === "up") smoothScrollTo(el, 0);
+      else smoothScrollTo(el, el.scrollHeight - el.clientHeight);
+      setTimeout(() => el.classList.remove("list-scroll-anim"), 500);
       return;
     }
     const st = el.scrollTop;
-    const vh = el.clientHeight;
     if (dir === "up") {
-      // Find the last message whose top is above current viewport top (with small padding)
       let target: HTMLElement | null = null;
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i];
@@ -433,23 +446,22 @@ export default function ChatRoom({
         }
       }
       if (target) {
-        el.scrollTo({ top: Math.max(0, target.offsetTop - 16), behavior: "smooth" });
+        smoothScrollTo(el, Math.max(0, target.offsetTop - 16));
         setTimeout(() => {
           target?.classList.add("msg-jump");
           setTimeout(() => target?.classList.remove("msg-jump"), 950);
-        }, 280);
+        }, 320);
       } else {
-        el.scrollTo({ top: 0, behavior: "smooth" });
+        smoothScrollTo(el, 0);
         const first = items[0];
         if (first) {
           setTimeout(() => {
             first.classList.add("msg-jump");
             setTimeout(() => first.classList.remove("msg-jump"), 950);
-          }, 280);
+          }, 320);
         }
       }
     } else {
-      // Find the first message that is below current viewport
       let target: HTMLElement | null = null;
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
@@ -459,23 +471,23 @@ export default function ChatRoom({
         }
       }
       if (target) {
-        el.scrollTo({ top: target.offsetTop - 12, behavior: "smooth" });
+        smoothScrollTo(el, target.offsetTop - 12);
         setTimeout(() => {
           target?.classList.add("msg-jump");
           setTimeout(() => target?.classList.remove("msg-jump"), 950);
-        }, 280);
+        }, 320);
       } else {
-        el.scrollTo({ top: el.scrollHeight - el.clientHeight, behavior: "smooth" });
+        smoothScrollTo(el, el.scrollHeight - el.clientHeight);
         const last = items[items.length - 1];
         if (last) {
           setTimeout(() => {
             last.classList.add("msg-jump");
             setTimeout(() => last.classList.remove("msg-jump"), 950);
-          }, 280);
+          }, 320);
         }
       }
     }
-    setTimeout(() => el.classList.remove("list-scroll-anim"), 340);
+    setTimeout(() => el.classList.remove("list-scroll-anim"), 500);
   };
 
   useEffect(() => {
