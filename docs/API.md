@@ -159,21 +159,28 @@ OpenAI-compatible. Body: `{ model?, messages[], stream?, session?, thread?, tool
 { "status","mode","client_ready","auth","cookies_configured","rate_limited_for",
   "model","protected","uptime_seconds","last_error" }
 ```
+`auth`: `missing_cookie` | `pending` | `ok` | `error` | `failed`. `cookies_configured=false` → kredensial sesi belum diisi di `gemini-server/.env`.
 
 ### Environment gateway (`gemini-server/.env`)
 
+Sensitif: nilai kredensial sesi diisi **lokal** di `gemini-server/.env` (di-gitignore) dan tidak pernah didokumentasikan/di-commit.
+
 | Variable | Default | Keterangan |
 |----------|---------|-----------|
-| `SECURE_1PSID`/`SECURE_1PSIDTS` | — | Cookie akun Gemini (wajib). |
+| `SECURE_1PSID`/`SECURE_1PSIDTS` | — | Kredensial sesi akun Gemini (wajib; isi rahasia, jangan commit). |
 | `HOST` / `PORT` | `127.0.0.1` / `8003` | Bind. Non-loopback wajib `API_SECRET`. |
 | `API_SECRET` | — | Bearer token untuk akses gateway. |
 | `GEMINI_MODEL` | `gemini-3-flash` | Model default. |
-| `GEMINI_INIT_TIMEOUT` | 60s | Timeout inisialisasi klien. |
-| `GEMINI_REQUEST_TIMEOUT` | 150s | Batas total satu generate. |
+| `GEMINI_INIT_TIMEOUT` | 60s | Timeout inisialisasi klien (10–120). |
+| `GEMINI_REQUEST_TIMEOUT` | 300s | Batas total satu generate (10–900). |
 | `GEMINI_REFRESH_INTERVAL` | 600s | Refresh token/klien berkala. |
 | `GEMINI_RETRY_DELAY` | 1.5s | Jeda retry. |
+| `GEMINI_AUTH_RETRY_COOLDOWN` | 1200s | Latch: menahan retry init setelah cookie ditolak. |
+| `GEMINI_RATE_LIMIT_COOLDOWN` | 300s | Jeda setelah kena limit Google (respons `429`). |
 | `GEMINI_MAX_HISTORY_TURNS` | 24 | Giliran riwayat maksimal. |
 | `GEMINI_MAX_PROMPT_CHARS` | 24000 | Budget prompt; lebih → riwayat tertua dipangkas. |
-| `GEMINI_MAX_CONTINUE_ROUNDS` | 3 | Giliran auto-continue saat jawaban terpotong. |
-| `GEMINI_COOKIE_PATH` | `./.cache/gemini-webapi` | Cache cookie. |
-| `CORS_ORIGINS` | default lokal | Daftar origin diizinkan (koma).
+| `GEMINI_MAX_CONTINUE_ROUNDS` | 4 | Giliran auto-continue saat jawaban terpotong (0–6). |
+| `GEMINI_COOKIE_PATH` | `./.cache/gemini-webapi` | Cache sesi (rotasi token). |
+| `CORS_ORIGINS` | default lokal | Daftar origin diizinkan (koma). |
+
+Kredensial dibaca ulang otomatis tiap request bila `gemini-server/.env` berubah (`_reload_cookies`); perubahan `.env` juga melepas latch auth tanpa restart service.

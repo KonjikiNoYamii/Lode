@@ -26,28 +26,23 @@ sensei-mentor/
 
 ### 1. Siapkan cookie akun Gemini
 
-Project ini memakai copy `gemini-server` di dalam repo. Folder ini **sensitif dan sengaja tidak di-commit** (sudah masuk `.gitignore`), jadi jangan dihapus dan jangan di-push. Autentikasinya memakai cookie sesi Google/Gemini, **bukan** Google API key, dan tidak memakai server Gemini project lain.
+Gateway AI project ini memakai copy `gemini-server` di dalam repo. Folder ini **sensitif dan sengaja tidak di-commit** (sudah masuk `.gitignore`), jadi jangan dihapus dan jangan di-push. Autentikasinya memakai **cookie sesi akun Gemini** yang diisi **lokal** di `gemini-server/.env` — **bukan** Google API key, dan tidak memakai server Gemini project lain.
 
-1. Buka https://gemini.google.com dan login ke akun yang mau dipakai.
-2. Buka DevTools (`F12`) → **Application/Storage** → **Cookies** → `https://gemini.google.com`.
-3. Salin nilai `__Secure-1PSID` dan `__Secure-1PSIDTS`.
-4. Siapkan file konfigurasi:
+Cookie akun itu setara password akunmu, jadi **tidak didokumentasikan di repo ini**: jangan commit, jangan push, jangan dibagikan (termasuk saat lapor bug), dan jangan tempel nilainya ke mana pun. Isi `gemini-server/.env` hanya di mesinmu sendiri (file dibuat dari `gemini-server/.env.example`, chmod 600 otomatis); langkah mengambil cookie-nya sengaja tidak ditulis di sini.
 
 ```bash
-cp gemini-server/.env.example gemini-server/.env
+npm run ai
 ```
 
-Isi `gemini-server/.env` dengan `SECURE_1PSID=<cookie>` dan `SECURE_1PSIDTS=<cookie>`. Jangan pernah commit file ini. `npm run ai` akan membuat virtualenv, memasang dependency dari `gemini-server/requirements.txt`, lalu menjalankan service lokal.
+`npm run ai` memvalidasi cookie, membuat virtualenv Python, memasang dependency dari `gemini-server/requirements.txt`, lalu menjalankan service lokal di port 8003.
 
-**Penyegaran cookie otomatis (`gemini-server/fetch_cookies.sh`):** saat start, AI server mencoba menyegarkan cookie dari Chrome headless lewat `gemini-server/fetch_cookies.sh`. Hasil fetch itu **diverifikasi dulu** ke Gemini (RPC `GetUserStatus`): cookie hanya ditulis ke `.env` kalau statusnya `AVAILABLE`. Kalau sesi Google sedang kadaluwarsa, `.env` lama **dipertahankan** dan service memakai cookie yang sudah ada (tidak ditimpa cookie mati).
-
-Kalau status pindah ke `UNAUTHENTICATED`, login interaktif sekali-sekali:
+Cek apakah service sehat:
 
 ```bash
-cd gemini-server && ./fetch_cookies.sh --visible --wait 300
+curl -s http://127.0.0.1:8003/health   # "auth": "ok" → siap dipakai
 ```
 
-Jendela Chrome profil khusus akan terbuka di halaman login Google; setelah login selesai, skrip menulis cookie yang sudah terverifikasi ke `.env` dan menutup Chrome. Server AI yang sedang berjalan otomatis membaca ulang `.env` dan init ulang tanpa perlu restart. Opsi `--force-unauth` tersedia untuk menulis cookie tanpa verifikasi (debugging).
+Atau lewat UI **Profil & Server** → bagian **Server AI** → tes koneksi.
 
 ### 2. Install
 
@@ -154,7 +149,7 @@ Service ini stateless: histori dan sesi percakapan disimpan oleh backend Sensei 
 - **Mendeteksi tulis-ulang** — kalau Gemini menulis ulang jawaban di tengah streaming (atau menimpanya dengan penolakan "saya hanya model bahasa"), gateway mengirim kontrol `reset` ke klien supaya isi tidak tertempel ganda; penolakan yang menimpa jawaban berarti dipertahankan jawaban aslinya.
 - **Memangkas budget prompt** — riwayat panjang dipangkas sesuai `GEMINI_MAX_HISTORY_TURNS` & `GEMINI_MAX_PROMPT_CHARS` sebelum dikirim ke Gemini.
 
-File `.env` dan cache cookie `.cache/` sudah di-gitignore. Variabel yang didukung: `HOST`, `PORT`, `API_SECRET`, `GEMINI_MODEL`, `GEMINI_INIT_TIMEOUT`, `GEMINI_REQUEST_TIMEOUT`, `GEMINI_REFRESH_INTERVAL`, `GEMINI_RETRY_DELAY`, `GEMINI_MAX_HISTORY_TURNS`, `GEMINI_MAX_PROMPT_CHARS`, `GEMINI_COOKIE_PATH`, `CORS_ORIGINS`. Jika `HOST` diganti dari loopback, `API_SECRET` wajib diisi.
+File `.env` (berisi cookie) dan cache cookie `.cache/` sudah di-gitignore — rahasia, jangan pernah di-commit. Variabel konfigurasi gateway beserta default-nya tercantum di `docs/API.md`. Jika `HOST` diganti dari loopback, `API_SECRET` wajib diisi.
 
 ## Testing & kualitas
 
