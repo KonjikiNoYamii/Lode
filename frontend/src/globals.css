@@ -249,6 +249,14 @@ body {
   animation: msg-jump-highlight 0.9s ease-out;
   border-radius: 1rem;
 }
+@keyframes btn-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.88); }
+  100% { transform: scale(1); }
+}
+.btn-press {
+  animation: btn-pulse 0.25s ease-out;
+}
 
 /* blok kode "bernapas" — oase visual di tengah teks panjang */
 .markdown-body pre {
