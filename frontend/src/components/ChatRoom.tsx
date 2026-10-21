@@ -21,7 +21,7 @@ import type {
   Topic,
   TopicStatus,
 } from "@/types";
-import { GraduationCap, BookOpen, FileText, RefreshCw } from "lucide-react";
+import { GraduationCap, BookOpen, FileText, RefreshCw, ArrowDown, ArrowUp } from "lucide-react";
 import { Markdown } from "./Markdown";
 import PlanPanel from "./PlanPanel";
 import FileHistoryPanel from "./FileHistoryPanel";
@@ -330,6 +330,9 @@ export default function ChatRoom({
       return true;
     }
   });
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [showScrollToTop, setShowScrollToTop] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [mood, setMood] = useState<Mood>("netral");
@@ -1070,7 +1073,16 @@ export default function ChatRoom({
       )}
 
       {/* daftar pesan */}
-      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
+      <div
+        ref={listRef}
+        className="flex-1 space-y-4 overflow-y-auto px-4 py-5 relative"
+        onScroll={() => {
+          const el = listRef.current;
+          if (!el) return;
+          setShowScrollToTop(el.scrollTop > 200);
+          setShowScrollToBottom(el.scrollTop + el.clientHeight < el.scrollHeight - 120);
+        }}
+      >
         {empty ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
             <MentorAvatar name={mascotName} mood={mood} />
@@ -1206,6 +1218,38 @@ export default function ChatRoom({
         )}
         <div ref={endRef} />
       </div>
+
+      {/* Scroll buttons (above composer) */}
+      {(showScrollToTop || showScrollToBottom) && (
+        <div className="absolute bottom-20 right-4 z-30 flex flex-col gap-2 sm:right-6">
+          {showScrollToTop && (
+            <button
+              onClick={() => {
+                const el = listRef.current;
+                if (el) el.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
+              aria-label="Scroll ke atas"
+              title="Ke atas"
+            >
+              <ArrowUp className="h-4 w-4" />
+            </button>
+          )}
+          {showScrollToBottom && (
+            <button
+              onClick={() => {
+                const el = listRef.current;
+                endRef.current?.scrollIntoView({ behavior: "smooth" });
+              }}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
+              aria-label="Scroll ke bawah"
+              title="Ke bawah"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* composer */}
       <div className="border-t border-white/10 px-4 py-3">
