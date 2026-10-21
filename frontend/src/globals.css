@@ -250,13 +250,13 @@ body {
   border-radius: 1rem;
 @keyframes list-jump {
   0% { transform: translateY(0); }
-  25% { transform: translateY(-8px); }
-  55% { transform: translateY(3px); }
-  80% { transform: translateY(-2px); }
+  25% { transform: translateY(-12px); }
+  55% { transform: translateY(4px); }
+  80% { transform: translateY(-3px); }
   100% { transform: translateY(0); }
 }
 .list-scroll-anim {
-  animation: list-jump 0.4s ease-out;
+  animation: list-jump 0.46s ease-out;
 }
 
 /* blok kode "bernapas" — oase visual di tengah teks panjang */
