@@ -431,8 +431,19 @@ export default function ChatRoom({
       }
       if (target) {
         el.scrollTo({ top: Math.max(0, target.offsetTop - 16), behavior: "smooth" });
+        setTimeout(() => {
+          target?.classList.add("msg-jump");
+          setTimeout(() => target?.classList.remove("msg-jump"), 950);
+        }, 280);
       } else {
         el.scrollTo({ top: 0, behavior: "smooth" });
+        const first = items[0];
+        if (first) {
+          setTimeout(() => {
+            first.classList.add("msg-jump");
+            setTimeout(() => first.classList.remove("msg-jump"), 950);
+          }, 280);
+        }
       }
     } else {
       // Find the first message that is below current viewport
@@ -446,8 +457,19 @@ export default function ChatRoom({
       }
       if (target) {
         el.scrollTo({ top: target.offsetTop - 12, behavior: "smooth" });
+        setTimeout(() => {
+          target?.classList.add("msg-jump");
+          setTimeout(() => target?.classList.remove("msg-jump"), 950);
+        }, 280);
       } else {
         el.scrollTo({ top: el.scrollHeight - el.clientHeight, behavior: "smooth" });
+        const last = items[items.length - 1];
+        if (last) {
+          setTimeout(() => {
+            last.classList.add("msg-jump");
+            setTimeout(() => last.classList.remove("msg-jump"), 950);
+          }, 280);
+        }
       }
     }
   };
