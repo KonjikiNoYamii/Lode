@@ -411,6 +411,9 @@ export default function ChatRoom({
   const scrollNearest = (dir: "up" | "down") => {
     const el = listRef.current;
     if (!el) return;
+    el.classList.remove("list-scroll-anim");
+    void el.offsetWidth;
+    el.classList.add("list-scroll-anim");
     const items = Array.from(el.querySelectorAll<HTMLElement>(".msg-item"));
     if (!items.length) {
       if (dir === "up") el.scrollTo({ top: 0, behavior: "smooth" });
@@ -472,6 +475,7 @@ export default function ChatRoom({
         }
       }
     }
+    setTimeout(() => el.classList.remove("list-scroll-anim"), 340);
   };
 
   useEffect(() => {

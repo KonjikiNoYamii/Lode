@@ -248,14 +248,14 @@ body {
 .msg-jump {
   animation: msg-jump-highlight 0.9s ease-out;
   border-radius: 1rem;
+@keyframes list-jump {
+  0% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+  60% { transform: translateY(2px); }
+  100% { transform: translateY(0); }
 }
-@keyframes btn-pulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(0.88); }
-  100% { transform: scale(1); }
-}
-.btn-press {
-  animation: btn-pulse 0.25s ease-out;
+.list-scroll-anim {
+  animation: list-jump 0.32s ease-out;
 }
 
 /* blok kode "bernapas" — oase visual di tengah teks panjang */
