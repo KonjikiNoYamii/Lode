@@ -414,7 +414,7 @@ export default function ChatRoom({
     const items = Array.from(el.querySelectorAll<HTMLElement>(".msg-item"));
     if (!items.length) {
       if (dir === "up") el.scrollTo({ top: 0, behavior: "smooth" });
-      else endRef.current?.scrollIntoView({ behavior: "smooth" });
+      else el.scrollTo({ top: el.scrollHeight - el.clientHeight, behavior: "smooth" });
       return;
     }
     const st = el.scrollTop;
@@ -424,7 +424,7 @@ export default function ChatRoom({
       let target: HTMLElement | null = null;
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i];
-        if (it.offsetTop < st - 20) {
+        if (it.offsetTop < st - 24) {
           target = it;
           break;
         }
@@ -435,19 +435,19 @@ export default function ChatRoom({
         el.scrollTo({ top: 0, behavior: "smooth" });
       }
     } else {
-      // Find the first message whose bottom is below current viewport bottom (with small padding)
+      // Find the first message that is below current viewport
       let target: HTMLElement | null = null;
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
-        if (it.offsetTop + it.offsetHeight > st + vh + 20) {
+        if (it.offsetTop > st + 48) {
           target = it;
           break;
         }
       }
       if (target) {
-        el.scrollTo({ top: target.offsetTop - 16, behavior: "smooth" });
+        el.scrollTo({ top: target.offsetTop - 12, behavior: "smooth" });
       } else {
-        endRef.current?.scrollIntoView({ behavior: "smooth" });
+        el.scrollTo({ top: el.scrollHeight - el.clientHeight, behavior: "smooth" });
       }
     }
   };
