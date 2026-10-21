@@ -408,6 +408,50 @@ export default function ChatRoom({
     }
   };
 
+  const scrollNearest = (dir: "up" | "down") => {
+    const el = listRef.current;
+    if (!el) return;
+    const items = Array.from(el.querySelectorAll<HTMLElement>(".msg-item"));
+    if (!items.length) {
+      if (dir === "up") el.scrollTo({ top: 0, behavior: "smooth" });
+      else endRef.current?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    const st = el.scrollTop;
+    const vh = el.clientHeight;
+    if (dir === "up") {
+      // Find the last message whose top is above current viewport top (with small padding)
+      let target: HTMLElement | null = null;
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        if (it.offsetTop < st - 20) {
+          target = it;
+          break;
+        }
+      }
+      if (target) {
+        el.scrollTo({ top: Math.max(0, target.offsetTop - 16), behavior: "smooth" });
+      } else {
+        el.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    } else {
+      // Find the first message whose bottom is below current viewport bottom (with small padding)
+      let target: HTMLElement | null = null;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.offsetTop + it.offsetHeight > st + vh + 20) {
+          target = it;
+          break;
+        }
+      }
+      if (target) {
+        el.scrollTo({ top: target.offsetTop - 16, behavior: "smooth" });
+      } else {
+        endRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+  };
+
   useEffect(() => {
     const last = [...messages].reverse().find((m) => m.role === "assistant" && m.mood);
     if (last?.mood && isMood(last.mood)) setMood(last.mood);
@@ -1125,13 +1169,13 @@ export default function ChatRoom({
             )}
             {messages.map((m) =>
               m.role === "user" ? (
-                <div key={m.id} className="flex justify-end">
+                <div key={m.id} className="msg-item flex justify-end">
                   <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-gradient-to-br from-mew to-sakura/90 px-4 py-2.5 text-sm text-white shadow-lg shadow-mew/10 sm:max-w-[75%]">
                     {m.content}
                   </div>
                 </div>
               ) : (
-                <div key={m.id} className="flex items-start gap-2.5">
+                <div key={m.id} className="msg-item flex items-start gap-2.5">
                   <MiniAvatar mood={isMood(m.mood) ? m.mood : "netral"} />
                   <div className={`min-w-0 max-w-[85%] flex-1 rounded-2xl rounded-tl-md border border-white/10 bg-panel2 px-4 py-3 sm:max-w-[80%] msg-anim${lastId === m.id ? " msg-stagger" : ""}`}>
                     <Markdown>{regeneratingId === m.id ? regenLive || m.content : m.content}</Markdown>
@@ -1224,30 +1268,24 @@ export default function ChatRoom({
         <div className="absolute bottom-20 right-4 z-30 flex flex-col gap-2 sm:right-6">
           {showScrollToTop && (
             <button
-              onClick={() => {
-                const el = listRef.current;
-                if (el) el.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
-              aria-label="Scroll ke atas"
-              title="Ke atas"
-            >
-              <ArrowUp className="h-4 w-4" />
-            </button>
-          )}
-          {showScrollToBottom && (
-            <button
-              onClick={() => {
-                const el = listRef.current;
-                endRef.current?.scrollIntoView({ behavior: "smooth" });
-              }}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
-              aria-label="Scroll ke bawah"
-              title="Ke bawah"
-            >
-              <ArrowDown className="h-4 w-4" />
-            </button>
-          )}
+            onClick={() => scrollNearest("up")}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
+            aria-label="Scroll ke atas"
+            title="Ke pesan di atas"
+          >
+            <ArrowUp className="h-4 w-4" />
+          </button>
+        )}
+        {showScrollToBottom && (
+          <button
+            onClick={() => scrollNearest("down")}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
+            aria-label="Scroll ke bawah"
+            title="Ke pesan di bawah"
+          >
+            <ArrowDown className="h-4 w-4" />
+          </button>
+        )}
         </div>
       )}
 
