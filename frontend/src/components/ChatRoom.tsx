@@ -1274,7 +1274,12 @@ export default function ChatRoom({
         >
           {showScrollToTop && (
             <button
-              onClick={() => scrollNearest("up")}
+              onClick={(e) => {
+                const btn = e.currentTarget;
+                btn.classList.add("scale-90");
+                setTimeout(() => btn.classList.remove("scale-90"), 150);
+                scrollNearest("up");
+              }}
               className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-mew/20 hover:text-night active:scale-95"
               aria-label="Scroll ke atas"
               title="Ke pesan di atas"
@@ -1284,7 +1289,12 @@ export default function ChatRoom({
           )}
           {showScrollToBottom && (
             <button
-              onClick={() => scrollNearest("down")}
+              onClick={(e) => {
+                const btn = e.currentTarget;
+                btn.classList.add("scale-90");
+                setTimeout(() => btn.classList.remove("scale-90"), 150);
+                scrollNearest("down");
+              }}
               className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-mew/20 hover:text-night active:scale-95"
               aria-label="Scroll ke bawah"
               title="Ke pesan di bawah"
