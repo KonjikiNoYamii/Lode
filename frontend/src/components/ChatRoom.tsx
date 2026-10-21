@@ -322,6 +322,14 @@ export default function ChatRoom({
   );
   const [folderChecking, setFolderChecking] = useState(false);
   const [folderSaving, setFolderSaving] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      return localStorage.getItem("lode:right-panel") !== "closed";
+    } catch {
+      return true;
+    }
+  });
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [mood, setMood] = useState<Mood>("netral");
@@ -1229,8 +1237,36 @@ export default function ChatRoom({
       </div>
 
       {/* panel vtuber & progress belajar (desktop) */}
-      <div className="hidden w-96 lg:w-[420px] xl:w-[460px] shrink-0 flex-col border-l border-white/10 md:flex h-full min-h-0 bg-panel/30">
-        {/* Bagian Atas: Avatar Mentor (FIXED / NON-SCROLLABLE) */}
+      <div
+        className={`relative hidden md:flex h-full min-h-0 transition-[width] duration-300 ease-in-out ${
+          rightPanelOpen
+            ? "w-96 lg:w-[420px] xl:w-[460px] border-l border-white/10"
+            : "w-0 border-l-0"
+        }`}
+      >
+        <button
+          onClick={() => {
+            const next = !rightPanelOpen;
+            setRightPanelOpen(next);
+            try {
+              localStorage.setItem("lode:right-panel", next ? "open" : "closed");
+            } catch {
+              /* ignore */
+            }
+          }}
+          className="absolute -left-3 top-1/2 -translate-y-1/2 z-40 flex h-8 w-6 items-center justify-center rounded-r-md border border-l-0 border-white/10 bg-panel/80 text-mist shadow-lg transition hover:text-night"
+          aria-label={rightPanelOpen ? "Sembunyikan panel kanan" : "Tampilkan panel kanan"}
+          title={rightPanelOpen ? "Sembunyikan panel" : "Tampilkan panel"}
+        >
+          {rightPanelOpen ? "›" : "‹"}
+        </button>
+
+        <div
+          className={`flex h-full min-h-0 w-full flex-col bg-panel/30 transition-opacity duration-200 ${
+            rightPanelOpen ? "opacity-100" : "pointer-events-none opacity-0"
+          }`}
+        >
+          {/* Bagian Atas: Avatar Mentor (FIXED / NON-SCROLLABLE) */}
         <div className="shrink-0 flex flex-col items-center gap-2.5 px-6 pt-6 pb-4 border-b border-white/10">
           <MentorAvatar
             name={mascotName}
@@ -1416,6 +1452,7 @@ export default function ChatRoom({
               </ul>
             </section>
           )}
+        </div>
         </div>
       </div>
     </div>
