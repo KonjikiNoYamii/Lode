@@ -1269,20 +1269,20 @@ export default function ChatRoom({
           {showScrollToTop && (
             <button
             onClick={() => scrollNearest("up")}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
-            aria-label="Scroll ke atas"
-            title="Ke pesan di atas"
-          >
-            <ArrowUp className="h-4 w-4" />
-          </button>
-        )}
-        {showScrollToBottom && (
-          <button
-            onClick={() => scrollNearest("down")}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition hover:text-night"
-            aria-label="Scroll ke bawah"
-            title="Ke pesan di bawah"
-          >
+      className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-mew/20 hover:text-night active:scale-95"
+      aria-label="Scroll ke atas"
+      title="Ke pesan di atas"
+    >
+      <ArrowUp className="h-4 w-4" />
+    </button>
+  )}
+  {showScrollToBottom && (
+    <button
+      onClick={() => scrollNearest("down")}
+      className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-panel/90 shadow-lg transition-all duration-200 hover:scale-110 hover:shadow-mew/20 hover:text-night active:scale-95"
+      aria-label="Scroll ke bawah"
+      title="Ke pesan di bawah"
+    >
             <ArrowDown className="h-4 w-4" />
           </button>
         )}
